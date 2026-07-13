@@ -153,6 +153,24 @@ svg { width: 22px; height: 22px; }
 .btn--ghost:hover { background: var(--border); }
 .btn--danger { color: var(--red); flex: none !important; width: 48px; padding: 0; }
 .btn--danger:hover { background: var(--red-soft); }
+
+.btn--google {
+  background: #fff; color: #3c4043;
+  border: 1.5px solid #dadce0;
+  box-shadow: var(--shadow-s);
+  font-weight: 600;
+}
+.btn--google:hover { background: #f8f9fb; box-shadow: var(--shadow-m); }
+.auth-g { display: inline-grid; place-items: center; width: 20px; height: 20px; }
+.auth-g svg { width: 20px; height: 20px; }
+.auth-actions { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-5); }
+.auth-actions .btn { width: 100%; }
+
+.settings-signout {
+  display: block; margin: var(--sp-4) auto 0;
+  color: var(--red);
+}
+.settings-signout:hover { background: var(--red-soft); }
 .btn--small { min-height: 38px; font-size: 13.5px; padding: 0 var(--sp-4); }
 
 /* ============================================================

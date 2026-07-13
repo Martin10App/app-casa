@@ -7,7 +7,7 @@
 
 import { $, $$, escapeHtml, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, isCloud } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, isCloud, authEnabled, onAuthChange, signIn, signOutUser } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { toast } from './components/toast.js';
@@ -17,6 +17,16 @@ import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } 
 const DEFAULT_USERS = {
   u1: { name: 'Martín', emoji: '👨', bg: '#dbe7ff' },
   u2: { name: 'Lucía',  emoji: '👩', bg: '#ffe3dc' },
+};
+
+/* Correos de Google autorizados → a qué perfil corresponde cada uno.
+   Solo estas cuentas pueden entrar (la base queda cerrada a ellas).
+   ⚠️ Van en minúsculas. */
+const ALLOWED_USERS = {
+  'martinmolina10101@gmail.com': 'u1',
+  // Lucía puede tener varias cuentas → habilitamos todas las candidatas como u2
+  'luciia0295@gmail.com':        'u2',
+  'brumitta1608@gmail.com':      'u2',
 };
 
 const state = {
@@ -434,6 +444,7 @@ function showSettings() {
         <input class="field__input" maxlength="20" value="${escapeHtml(u.name)}" aria-label="Nombre" placeholder="Nombre">
       </div>
     </div>`).join('');
+  $('#settings-signout').hidden = !authEnabled();   // "Cerrar sesión" solo en modo nube
   $('#settings-overlay').hidden = false;
 }
 
@@ -453,24 +464,26 @@ function rerender() {
   if (!$('#view-super').hidden) renderSuper();
 }
 
-/* ================= Arranque ================= */
-async function boot() {
-  // Íconos estáticos declarados en el HTML
-  $$('[data-icon]').forEach((el) => { el.innerHTML = ICONS[el.dataset.icon] || ''; });
-  $('[data-nav="home"]', $('#view-list')).innerHTML = ICONS.back;
-  $('#prices-back').innerHTML = ICONS.back;
-  $('#search-icon').innerHTML = ICONS.search;
-  $('#super-close').innerHTML = ICONS.close;
-
-  initTheme();
-  initHero();
-  renderHome();
-
-  // Capa de datos (nube o local)
-  await initData();
-  if (!isCloud) {
-    toast('Modo local: falta pegar la config de Firebase para sincronizar entre celulares (ver README)', { emoji: '📴', duration: 6500 });
+/* ================= Login: pantalla de acceso ================= */
+function showAuthGate(mode, email = '') {
+  const overlay = $('#auth-overlay');
+  overlay.hidden = false;
+  if (mode === 'denied') {
+    $('#auth-title').textContent = 'Cuenta sin acceso';
+    $('#auth-sub').innerHTML = `La cuenta <b>${escapeHtml(email)}</b> no está habilitada para esta casa. Entrá con la cuenta correcta.`;
+    $('#auth-signout').hidden = false;
+  } else {
+    $('#auth-title').textContent = 'Nuestro Hogar';
+    $('#auth-sub').textContent = 'Iniciá sesión para entrar a la casa';
+    $('#auth-signout').hidden = true;
   }
+}
+
+/* ================= Arranque de datos (una sola vez, tras el login) ================= */
+let appStarted = false;
+function startApp() {
+  if (appStarted) return;   // onAuthChange puede dispararse varias veces
+  appStarted = true;
 
   subscribeUsers((users) => {
     state.users = { ...structuredClone(DEFAULT_USERS), ...users };
@@ -499,11 +512,58 @@ async function boot() {
     if (state.view === 'home') renderHome();
   });
 
-  // Usuario actual
-  if (state.me && state.users[state.me]) {
+  // Usuario actual (en modo nube ya viene del login; en local, elegir)
+  if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
     renderAvatarBtn();
   } else {
     showUserPicker();
+  }
+}
+
+/* ================= Arranque ================= */
+async function boot() {
+  // Íconos estáticos declarados en el HTML
+  $$('[data-icon]').forEach((el) => { el.innerHTML = ICONS[el.dataset.icon] || ''; });
+  $('[data-nav="home"]', $('#view-list')).innerHTML = ICONS.back;
+  $('#prices-back').innerHTML = ICONS.back;
+  $('#search-icon').innerHTML = ICONS.search;
+  $('#super-close').innerHTML = ICONS.close;
+
+  initTheme();
+  initHero();
+  renderHome();
+
+  // Capa de datos (nube o local)
+  await initData();
+
+  // Login: en modo nube exigimos cuenta de Google autorizada; en local se entra directo
+  if (authEnabled()) {
+    $('#auth-g-icon').innerHTML = ICONS.google;
+    $('#auth-google').addEventListener('click', async () => {
+      const btn = $('#auth-google');
+      btn.disabled = true;
+      try { await signIn(); }
+      catch (err) {
+        console.error('[Auth]', err);
+        toast('No se pudo iniciar sesión. Probá de nuevo.', { emoji: '⚠️' });
+      } finally { btn.disabled = false; }
+    });
+    $('#auth-signout').addEventListener('click', () => signOutUser());
+
+    onAuthChange((user) => {
+      if (!user) { showAuthGate('signin'); return; }
+      const email = (user.email || '').toLowerCase();
+      const mapped = ALLOWED_USERS[email];
+      if (!mapped) { showAuthGate('denied', email); return; }
+      // Cuenta autorizada
+      state.me = mapped;
+      localStorage.setItem('nh_me', mapped);
+      $('#auth-overlay').hidden = true;
+      startApp();
+    });
+  } else {
+    toast('Modo local: falta pegar la config de Firebase para sincronizar entre celulares (ver README)', { emoji: '📴', duration: 6500 });
+    startApp();
   }
 
   // Modal de alta/edición
@@ -606,11 +666,13 @@ async function boot() {
     toast(`¡Hola, <b>${escapeHtml(me.name)}</b>! ${me.emoji}`, { emoji: '👋', type: 'success' });
     requestNotifPermission();
   });
-  $('#btn-user').addEventListener('click', showUserPicker);
+  // En modo nube la identidad la fija el login → el avatar abre ajustes (no el selector)
+  $('#btn-user').addEventListener('click', () => { authEnabled() ? showSettings() : showUserPicker(); });
   $('#btn-edit-users').addEventListener('click', () => { $('#user-overlay').hidden = true; showSettings(); });
+  $('#settings-signout').addEventListener('click', () => signOutUser());
 
   // Ajustes de usuarios
-  $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; showUserPicker(); });
+  $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; if (!authEnabled()) showUserPicker(); });
 
   // Tocar el avatar en ajustes → elegir foto
   $('#settings-users').addEventListener('click', (e) => {
@@ -651,7 +713,7 @@ async function boot() {
     $('#settings-overlay').hidden = true;
     renderAvatarBtn();
     rerender();
-    showUserPicker();
+    if (!authEnabled()) showUserPicker();
   });
 
   // Volver a la app: refrescar saludo y contadores

@@ -147,6 +147,21 @@
     </button>
   </nav>
 
+  <!-- ================= LOGIN (Google) ================= -->
+  <div class="user-overlay" id="auth-overlay" hidden>
+    <div class="user-card">
+      <span class="user-card__logo">🏠</span>
+      <h2 class="user-card__title" id="auth-title">Nuestro Hogar</h2>
+      <p class="user-card__sub" id="auth-sub">Iniciá sesión para entrar a la casa</p>
+      <div class="auth-actions">
+        <button class="btn btn--google" id="auth-google">
+          <span class="auth-g" id="auth-g-icon"></span> Entrar con Google
+        </button>
+        <button class="btn btn--ghost" id="auth-signout" hidden>Salir e intentar con otra cuenta</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= SELECTOR DE USUARIO (primer uso) ================= -->
   <div class="user-overlay" id="user-overlay" hidden>
     <div class="user-card">
@@ -168,6 +183,7 @@
         <button class="btn btn--ghost" id="settings-cancel">Cancelar</button>
         <button class="btn btn--primary" id="settings-save">Guardar</button>
       </div>
+      <button class="btn btn--ghost btn--small settings-signout" id="settings-signout" hidden>Cerrar sesión</button>
     </div>
   </div>
 

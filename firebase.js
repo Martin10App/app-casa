@@ -47,12 +47,14 @@ let adapter = null;
 async function createCloudAdapter() {
   const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
   const fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const authMod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
 
   const app = initializeApp(FIREBASE_CONFIG);
   // Cache local persistente: la app abre al instante y aguanta cortes de internet
   const db = fs.initializeFirestore(app, {
     localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
   });
+  const auth = authMod.getAuth(app);
 
   const itemsCol  = fs.collection(db, 'items');
   const pricesCol = fs.collection(db, 'prices');
@@ -61,6 +63,36 @@ async function createCloudAdapter() {
 
   return {
     name: 'nube',
+
+    /* ---- Autenticación (login con Google) ---- */
+    authEnabled: true,
+
+    onAuthChange(cb) {
+      // Procesa el retorno de signInWithRedirect (móvil) sin romper si falla
+      authMod.getRedirectResult(auth).catch((e) => console.warn('[Auth] redirect:', e));
+      return authMod.onAuthStateChanged(auth, (user) => {
+        cb(user ? { uid: user.uid, email: user.email, name: user.displayName, photo: user.photoURL } : null);
+      });
+    },
+
+    async signIn() {
+      const provider = new authMod.GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      try {
+        await authMod.signInWithPopup(auth, provider);
+      } catch (e) {
+        // En apps instaladas / móviles el popup a veces está bloqueado → probamos redirect
+        if (['auth/popup-blocked', 'auth/cancelled-popup-request', 'auth/operation-not-supported-in-this-environment', 'auth/popup-closed-by-user'].includes(e.code)) {
+          await authMod.signInWithRedirect(auth, provider);
+        } else {
+          throw e;
+        }
+      }
+    },
+
+    async signOutUser() {
+      await authMod.signOut(auth);
+    },
 
     subscribeItems(cb) {
       const q = fs.query(itemsCol, fs.orderBy('createdAt', 'desc'), fs.limit(500));
@@ -187,6 +219,12 @@ function createLocalAdapter() {
   return {
     name: 'local',
 
+    /* ---- Auth: en modo local no hay login (siempre "dentro") ---- */
+    authEnabled: false,
+    onAuthChange(cb) { cb({ local: true }); return () => {}; },
+    async signIn() {},
+    async signOutUser() {},
+
     subscribeItems(cb) { listeners.items.add(cb); emitItems(); return () => listeners.items.delete(cb); },
 
     async addItem(item) {
@@ -281,3 +319,7 @@ export const saveHome       = (data)        => adapter.saveHome(data);
 export const subscribePrices = (cb)         => adapter.subscribePrices(cb);
 export const savePrice      = (product)     => adapter.savePrice(product);
 export const deletePrice    = (id)          => adapter.deletePrice(id);
+export const authEnabled    = ()            => adapter.authEnabled;
+export const onAuthChange   = (cb)          => adapter.onAuthChange(cb);
+export const signIn         = ()            => adapter.signIn();
+export const signOutUser    = ()            => adapter.signOutUser();
