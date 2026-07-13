@@ -1,0 +1,596 @@
+/* ============================================================
+   app.js — Orquestador de "Nuestro Hogar"
+   ------------------------------------------------------------
+   Estado global, navegación entre vistas, renderizado y
+   reacción en tiempo real a los cambios de datos.
+   ============================================================ */
+
+import { $, $$, escapeHtml, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney } from './utils/helpers.js';
+import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribePrices, savePrice, deletePrice, isCloud } from './firebase.js';
+import { initModal, openModal } from './components/modal.js';
+import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
+import { toast } from './components/toast.js';
+import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
+
+/* ================= Estado ================= */
+const DEFAULT_USERS = {
+  u1: { name: 'Martín', emoji: '👨', bg: '#dbe7ff' },
+  u2: { name: 'Lucía',  emoji: '👩', bg: '#ffe3dc' },
+};
+
+const state = {
+  items: [],
+  prices: [],
+  users: structuredClone(DEFAULT_USERS),
+  me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
+  view: 'home',
+  activeCard: null,                            // tarjeta abierta en la vista de lista
+  search: { text: '', cat: null, prio: null, status: 'pendiente', when: null },
+  statusMap: new Map(),                        // id → status previo (para notificaciones)
+  firstSnapshot: true,
+};
+
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+const userOf = (id) => state.users[id] || { name: '—', emoji: '👤', bg: '#eee' };
+const pending = () => state.items.filter((i) => i.status === 'pendiente');
+const done    = () => state.items.filter((i) => i.status === 'completado');
+
+/* ================= Tema claro / oscuro ================= */
+function applyTheme(theme, animate = false) {
+  if (animate) {
+    document.body.classList.add('theme-anim');
+    setTimeout(() => document.body.classList.remove('theme-anim'), 600);
+  }
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem('nh_theme', theme);
+  $('#meta-theme').content = theme === 'dark' ? '#0e131c' : '#f7f9fc';
+  $('#btn-theme').innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('nh_theme');
+  const prefers = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  applyTheme(saved || prefers);
+  $('#btn-theme').addEventListener('click', () => applyTheme(isDark() ? 'light' : 'dark', true));
+}
+
+/* ================= Portada ================= */
+function initHero() {
+  const hero = pickHero();
+  const img = $('#hero-img');
+  img.src = hero.url;
+  img.alt = hero.alt;
+  img.addEventListener('load', () => img.classList.add('is-loaded'));
+  img.addEventListener('error', () => img.remove()); // queda el gradiente de respaldo
+
+  $('#greeting').textContent = greeting();
+  $('#phrase').textContent = randomPhrase();
+}
+
+function renderHeroStats() {
+  const p = pending();
+  const urgent = p.filter((i) => i.priority === 'alta').length;
+  const today = new Date().toISOString().slice(0, 10);
+  const dueSoon = p.filter((i) => i.dueDate && i.dueDate <= today).length;
+
+  const pills = [`<span class="stat-pill">📝 ${p.length} pendiente${p.length === 1 ? '' : 's'}</span>`];
+  if (urgent)  pills.push(`<span class="stat-pill">🔥 ${urgent} urgente${urgent === 1 ? '' : 's'}</span>`);
+  if (dueSoon) pills.push(`<span class="stat-pill">⏰ ${dueSoon} para hoy</span>`);
+  $('#hero-stats').innerHTML = pills.join('');
+}
+
+/* ================= Render: tiles compartidos ================= */
+function tileHtml(item, cssClass) {
+  if (item.photo) return `<div class="${cssClass}"><img src="${item.photo}" alt=""></div>`;
+  const grad = isDark() ? productGradientDark(item.name, item.category) : productGradient(item.name, item.category);
+  return `<div class="${cssClass}" style="background:${grad}">${productVisual(item.name, item.category)}</div>`;
+}
+
+const PRIO_COLOR = { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--red)' };
+const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
+
+function itemCardHtml(item, i) {
+  const cat = CATEGORIES[item.category] || CATEGORIES.otros;
+  const by = userOf(item.createdBy);
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+    <article class="item-card" data-id="${item.id}" style="--i:${i}; --prio-color:${PRIO_COLOR[item.priority] || 'transparent'}">
+      ${tileHtml(item, 'item-card__tile')}
+      <div class="item-card__body">
+        <div class="item-card__name">${escapeHtml(item.name)}${item.qty > 1 ? `<span class="qty">×${item.qty}</span>` : ''}</div>
+        ${item.detail ? `<div class="item-card__detail">${escapeHtml(item.detail)}</div>` : ''}
+        <div class="item-card__meta">
+          <span class="prio-tag prio-tag--${item.priority}">${PRIO_LABEL[item.priority]}</span>
+          <span>${cat.emoji} ${cat.label}</span>
+          <span>· <span class="avatar-mini">${by.emoji}</span> ${escapeHtml(by.name)} · ${timeAgo(item.createdAt)}</span>
+          ${item.amount ? `<span class="item-card__amount">${fmtMoney(item.amount)}</span>` : ''}
+          ${item.dueDate ? `<span class="item-card__due ${item.dueDate < today ? 'is-late' : ''}">⏰ ${fmtDate(item.dueDate + 'T12:00')}</span>` : ''}
+        </div>
+      </div>
+      <button class="item-more" data-action="edit" aria-label="Editar ${escapeHtml(item.name)}">${ICONS.edit}</button>
+      <button class="item-check" data-action="complete" aria-label="Marcar ${escapeHtml(item.name)} como listo">${ICONS.check}</button>
+    </article>`;
+}
+
+function emptyStateHtml(emoji, title, sub) {
+  return `
+    <div class="empty-state">
+      <span class="empty-state__emoji">${emoji}</span>
+      <div class="empty-state__title">${title}</div>
+      <div class="empty-state__sub">${sub}</div>
+    </div>`;
+}
+
+/* ================= Render: Inicio ================= */
+function renderHome() {
+  const p = pending();
+  $('#cards-grid').innerHTML = HOME_CARDS.map((card, i) => {
+    const count = card.special === 'prices'
+      ? state.prices.length
+      : p.filter((it) => card.cats.includes(it.category)).length;
+    return `
+      <button class="home-card" data-card="${card.id}" style="--card-hue:${card.hue}; --i:${i}" aria-label="${card.label}, ${count} pendientes">
+        <img class="home-card__img" src="${card.img}" alt="" loading="lazy"
+             onload="this.classList.add('is-loaded')" onerror="this.remove()">
+        <span class="home-card__icon">${ICONS[card.icon]}</span>
+        <span class="home-card__count ${count ? '' : 'is-zero'}">${count}</span>
+        <span class="home-card__body">
+          <span class="home-card__label">${card.label}</span>
+          <span class="home-card__tagline">${card.tagline}</span>
+        </span>
+      </button>`;
+  }).join('');
+  renderHeroStats();
+}
+
+/* ================= Render: lista de una tarjeta ================= */
+function renderList() {
+  const card = HOME_CARDS.find((c) => c.id === state.activeCard);
+  if (!card) return;
+  const items = pending().filter((it) => card.cats.includes(it.category));
+  $('#list-title').textContent = card.label;
+  $('#list-count').textContent = items.length ? `${items.length} pendiente${items.length === 1 ? '' : 's'}` : '';
+  $('#items-list').innerHTML = items.length
+    ? items.map(itemCardHtml).join('')
+    : emptyStateHtml('🌿', 'Todo al día', 'No hay nada pendiente por acá.');
+}
+
+/* ================= Render: búsqueda ================= */
+function renderSearchFilters() {
+  $('#filter-cats').innerHTML =
+    `<button class="chip ${!state.search.cat ? 'is-active' : ''}" data-fcat="">Todas</button>` +
+    Object.entries(CATEGORIES).map(([id, c]) =>
+      `<button class="chip ${state.search.cat === id ? 'is-active' : ''}" data-fcat="${id}">${c.emoji} ${c.label}</button>`
+    ).join('');
+
+  const s = state.search;
+  $('#filter-extra').innerHTML = `
+    <button class="chip ${s.status === 'pendiente' ? 'is-active' : ''}" data-fstatus="pendiente">Pendientes</button>
+    <button class="chip ${s.status === 'completado' ? 'is-active' : ''}" data-fstatus="completado">Completados</button>
+    <button class="chip chip--baja ${s.prio === 'baja' ? 'is-active' : ''}" data-fprio="baja">🟢 Baja</button>
+    <button class="chip chip--media ${s.prio === 'media' ? 'is-active' : ''}" data-fprio="media">🟡 Media</button>
+    <button class="chip chip--alta ${s.prio === 'alta' ? 'is-active' : ''}" data-fprio="alta">🔴 Alta</button>
+    <button class="chip ${s.when === 'hoy' ? 'is-active' : ''}" data-fwhen="hoy">Hoy</button>
+    <button class="chip ${s.when === 'semana' ? 'is-active' : ''}" data-fwhen="semana">Últimos 7 días</button>`;
+}
+
+function renderSearchResults() {
+  const s = state.search;
+  const text = normalize(s.text);
+  const now = Date.now();
+
+  const results = state.items.filter((it) => {
+    if (s.status && it.status !== s.status) return false;
+    if (s.cat && it.category !== s.cat) return false;
+    if (s.prio && it.priority !== s.prio) return false;
+    if (s.when === 'hoy' && now - (it.createdAt || 0) > 24 * 3600e3) return false;
+    if (s.when === 'semana' && now - (it.createdAt || 0) > 7 * 24 * 3600e3) return false;
+    if (text && !normalize(it.name + ' ' + (it.detail || '')).includes(text)) return false;
+    return true;
+  });
+
+  $('#search-results').innerHTML = results.length
+    ? results.map(itemCardHtml).join('')
+    : emptyStateHtml('🔍', 'Sin resultados', 'Probá con otra palabra o filtro.');
+}
+
+/* ================= Render: historial ================= */
+function renderHistory() {
+  const items = done().sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  $('#history-count').textContent = items.length ? `${items.length} completados` : '';
+
+  if (!items.length) {
+    $('#history-list').innerHTML = emptyStateHtml('🗂️', 'Historial vacío', 'Lo que completen va a aparecer acá.');
+    return;
+  }
+
+  const byDay = groupBy(items, (it) => fmtDate(it.completedAt));
+  $('#history-list').innerHTML = Object.entries(byDay).map(([day, group]) => `
+    <div class="history-day">${day}</div>
+    ${group.map((item, i) => {
+      const by = userOf(item.createdBy);
+      const doneBy = userOf(item.completedBy);
+      return `
+        <article class="history-item" data-id="${item.id}" style="--i:${i}">
+          ${tileHtml(item, 'history-item__tile')}
+          <div class="history-item__body">
+            <div class="history-item__name">${escapeHtml(item.name)}${item.qty > 1 ? ` ×${item.qty}` : ''}</div>
+            <div class="history-item__meta">
+              ${by.emoji} agregó <b>${escapeHtml(by.name)}</b> · ${doneBy.emoji} completó <b>${escapeHtml(doneBy.name)}</b> · ${fmtTime(item.completedAt)}
+              ${item.amount ? ` · <b>${fmtMoney(item.amount)}</b>` : ''}
+            </div>
+          </div>
+          <div class="history-item__actions">
+            <button class="item-more" data-action="restore" aria-label="Restaurar">${ICONS.restore}</button>
+            <button class="item-more" data-action="delete" aria-label="Eliminar">${ICONS.trash}</button>
+          </div>
+        </article>`;
+    }).join('')}
+  `).join('');
+}
+
+/* ================= Render: Modo Supermercado ================= */
+function renderSuper() {
+  const items = pending().sort((a, b) => {
+    const order = { alta: 0, media: 1, baja: 2 };
+    return order[a.priority] - order[b.priority];
+  });
+  $('#super-sub').textContent = `${items.length} pendiente${items.length === 1 ? '' : 's'}`;
+  $('#super-list').innerHTML = items.length
+    ? items.map((item, i) => `
+      <article class="super-card" data-id="${item.id}" style="--i:${i}">
+        ${tileHtml(item, 'super-card__tile')}
+        <div class="super-card__body">
+          <div class="super-card__name">${escapeHtml(item.name)}</div>
+          ${item.detail ? `<div class="super-card__detail">${escapeHtml(item.detail)}</div>` : ''}
+          <span class="super-card__qty">×${item.qty || 1}</span>
+        </div>
+        <button class="super-check" data-action="super-complete" aria-label="Marcar ${escapeHtml(item.name)}">${ICONS.check}</button>
+      </article>`).join('')
+    : emptyStateHtml('🎉', '¡Changuito completo!', 'No queda nada pendiente para comprar.');
+}
+
+/* ================= Navegación ================= */
+function show(view) {
+  state.view = view;
+  $$('.view').forEach((v) => v.classList.toggle('is-active', v.id === `view-${view}`));
+  $$('.nav-btn[data-nav]').forEach((b) => b.classList.toggle('is-active', b.dataset.nav === view));
+  $('#hero').classList.toggle('is-hidden', view !== 'home');
+  window.scrollTo({ top: 0 });
+
+  if (view === 'home') renderHome();
+  if (view === 'list') renderList();
+  if (view === 'prices') renderPrices();
+  if (view === 'search') { renderSearchFilters(); renderSearchResults(); }
+  if (view === 'history') renderHistory();
+}
+
+function openSuper() {
+  renderSuper();
+  const superEl = $('#view-super');
+  superEl.hidden = false;
+  superEl.classList.remove('is-closing');
+  document.body.classList.add('no-scroll');
+}
+
+function closeSuper() {
+  const superEl = $('#view-super');
+  superEl.classList.add('is-closing');
+  setTimeout(() => { superEl.hidden = true; document.body.classList.remove('no-scroll'); }, 300);
+}
+
+/* ================= Acciones sobre ítems ================= */
+async function handleComplete(id, cardEl, doneClass) {
+  cardEl.classList.add(doneClass);
+  // Espera a que termine la animación antes de persistir
+  setTimeout(async () => {
+    try {
+      await completeItem(id, state.me);
+    } catch (err) {
+      console.error(err);
+      cardEl.classList.remove(doneClass);
+      toast('No se pudo guardar el cambio', { emoji: '⚠️' });
+    }
+  }, 420);
+}
+
+function bindItemActions(container, doneClass = 'item-card--completing') {
+  container.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const cardEl = btn.closest('[data-id]');
+    const id = cardEl?.dataset.id;
+    if (!id) return;
+    const item = state.items.find((it) => it.id === id);
+
+    switch (btn.dataset.action) {
+      case 'complete':
+      case 'super-complete':
+        btn.classList.add('is-on');
+        handleComplete(id, cardEl, btn.dataset.action === 'super-complete' ? 'super-card--done' : doneClass);
+        break;
+      case 'edit':
+        if (item) openModal(item);
+        break;
+      case 'restore':
+        await restoreItem(id);
+        toast(`<b>${escapeHtml(item?.name || '')}</b> volvió a pendientes`, { emoji: '↩️' });
+        break;
+      case 'delete':
+        if (confirm(`¿Eliminar "${item?.name}" definitivamente?`)) {
+          await deleteItem(id);
+          toast('Eliminado del historial', { emoji: '🗑️' });
+        }
+        break;
+    }
+  });
+}
+
+/* ================= Notificaciones en tiempo real ================= */
+function detectChanges(items) {
+  if (state.firstSnapshot) {
+    items.forEach((it) => state.statusMap.set(it.id, it.status));
+    state.firstSnapshot = false;
+    return;
+  }
+
+  for (const it of items) {
+    const prev = state.statusMap.get(it.id);
+    const other = it.createdBy !== state.me;
+    const isRecent = Date.now() - (it.createdAt || 0) < 3 * 60e3;
+
+    if (prev === undefined && other && isRecent) {
+      const by = userOf(it.createdBy);
+      toast(`${by.emoji} <b>${escapeHtml(by.name)}</b> agregó: ${escapeHtml(it.name)}`, { emoji: '✨', type: 'success' });
+      systemNotify('Nuestro Hogar', `${by.name} agregó: ${it.name}`);
+    }
+    if (prev === 'pendiente' && it.status === 'completado' && it.completedBy !== state.me) {
+      const by = userOf(it.completedBy);
+      toast(`${by.emoji} <b>${escapeHtml(by.name)}</b> completó: ${escapeHtml(it.name)}`, { emoji: '✅' });
+      systemNotify('Nuestro Hogar', `${by.name} completó: ${it.name}`);
+    }
+    state.statusMap.set(it.id, it.status);
+  }
+}
+
+/* ================= Recordatorios que avisan ================= */
+/** Si hay un recordatorio pendiente cuya fecha ya llegó, avisa (una vez por día). */
+function checkReminders() {
+  const today = new Date().toISOString().slice(0, 10);
+  pending()
+    .filter((it) => it.category === 'recordatorios' && it.dueDate && it.dueDate <= today && !wasRemindedToday(it.id))
+    .forEach((it) => {
+      toast(`⏰ Recordatorio de hoy: <b>${escapeHtml(it.name)}</b>`, { emoji: '⏰', type: 'success', duration: 7000 });
+      systemNotify('Recordatorio — Nuestro Hogar', it.name);
+      markReminded(it.id);
+    });
+}
+
+/* ================= Usuarios ================= */
+function renderAvatarBtn() {
+  const me = userOf(state.me);
+  const btn = $('#btn-user');
+  btn.textContent = me.emoji;
+  btn.style.setProperty('--avatar-bg', me.bg);
+  btn.title = me.name;
+}
+
+function showUserPicker() {
+  $('#user-options').innerHTML = Object.entries(state.users).map(([id, u]) => `
+    <button class="user-option" data-user="${id}" style="--user-bg:${u.bg}">
+      <span class="user-option__avatar" style="--user-bg:${u.bg}; background:${u.bg}">${u.emoji}</span>
+      <span class="user-option__name">${escapeHtml(u.name)}</span>
+    </button>`).join('');
+  $('#user-overlay').hidden = false;
+}
+
+function showSettings() {
+  $('#settings-users').innerHTML = Object.entries(state.users).map(([id, u]) => `
+    <div class="settings-user" data-user="${id}">
+      <input class="settings-user__emoji" maxlength="4" value="${escapeHtml(u.emoji)}" aria-label="Emoji">
+      <input class="field__input" maxlength="20" value="${escapeHtml(u.name)}" aria-label="Nombre">
+    </div>`).join('');
+  $('#settings-overlay').hidden = false;
+}
+
+/* ================= Re-render global ================= */
+function rerender() {
+  renderHeroStats();
+  const badge = $('#super-badge');
+  const count = pending().length;
+  badge.hidden = !count;
+  badge.textContent = count > 99 ? '99+' : count;
+
+  if (state.view === 'home') renderHome();
+  if (state.view === 'list') renderList();
+  if (state.view === 'prices') renderPrices();
+  if (state.view === 'search') renderSearchResults();
+  if (state.view === 'history') renderHistory();
+  if (!$('#view-super').hidden) renderSuper();
+}
+
+/* ================= Arranque ================= */
+async function boot() {
+  // Íconos estáticos declarados en el HTML
+  $$('[data-icon]').forEach((el) => { el.innerHTML = ICONS[el.dataset.icon] || ''; });
+  $('[data-nav="home"]', $('#view-list')).innerHTML = ICONS.back;
+  $('#prices-back').innerHTML = ICONS.back;
+  $('#search-icon').innerHTML = ICONS.search;
+  $('#super-close').innerHTML = ICONS.close;
+
+  initTheme();
+  initHero();
+  renderHome();
+
+  // Capa de datos (nube o local)
+  await initData();
+  if (!isCloud) {
+    toast('Modo local: falta pegar la config de Firebase para sincronizar entre celulares (ver README)', { emoji: '📴', duration: 6500 });
+  }
+
+  subscribeUsers((users) => {
+    state.users = { ...structuredClone(DEFAULT_USERS), ...users };
+    renderAvatarBtn();
+    rerender();
+  });
+
+  subscribeItems((items) => {
+    state.items = items;
+    detectChanges(items);
+    rerender();
+    checkReminders();
+  });
+
+  // Mientras la app queda abierta, revisar cada 20 min si cruzó la fecha de algún recordatorio
+  setInterval(checkReminders, 20 * 60_000);
+
+  subscribePrices((prices) => {
+    state.prices = prices;
+    if (state.view === 'prices') renderPrices();
+    if (state.view === 'home') renderHome();
+  });
+
+  // Usuario actual
+  if (state.me && state.users[state.me]) {
+    renderAvatarBtn();
+  } else {
+    showUserPicker();
+  }
+
+  // Modal de alta/edición
+  initModal(async (item, isEdit) => {
+    if (isEdit) {
+      const { id, status, completedBy, completedAt, ...patch } = item;
+      await updateItem(id, patch);
+      toast(`<b>${escapeHtml(item.name)}</b> actualizado`, { emoji: '✏️', type: 'success' });
+    } else {
+      await addItem({ ...item, createdBy: state.me });
+      toast(`<b>${escapeHtml(item.name)}</b> agregado`, { emoji: '✅', type: 'success' });
+      requestNotifPermission();
+    }
+  }, async (id) => {
+    await deleteItem(id);
+    toast('Elemento eliminado', { emoji: '🗑️' });
+  });
+
+  // Libreta de precios
+  initPrices({
+    getPrices: () => state.prices,
+    getUsers:  () => state.users,
+    getMe:     () => state.me,
+    savePrice,
+    deletePrice,
+    isDark,
+  });
+
+  /* ---------- Eventos globales ---------- */
+
+  // Navegación inferior
+  $$('.nav-btn[data-nav]').forEach((b) =>
+    b.addEventListener('click', () => {
+      if (b.dataset.nav === 'super-nav') { openSuper(); return; }
+      show(b.dataset.nav);
+    })
+  );
+  $('[data-nav="home"]', $('#view-list')).addEventListener('click', () => show('home'));
+  $('#prices-back').addEventListener('click', () => show('home'));
+
+  // FAB → en la libreta de precios abre el modal de precios; si no, el de elementos
+  $('#fab').addEventListener('click', () => {
+    if (state.view === 'prices') { openPriceModal(); return; }
+    const card = state.view === 'list' ? HOME_CARDS.find((c) => c.id === state.activeCard) : null;
+    openModal(card ? card.cats[0] : null);
+  });
+
+  // Tarjetas del inicio
+  $('#cards-grid').addEventListener('click', (e) => {
+    const cardEl = e.target.closest('.home-card');
+    if (!cardEl) return;
+    const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
+    if (card?.special === 'prices') { show('prices'); return; }
+    state.activeCard = cardEl.dataset.card;
+    show('list');
+  });
+
+  // Modo supermercado
+  $('#btn-super').addEventListener('click', openSuper);
+  $('#super-close').addEventListener('click', closeSuper);
+
+  // Acciones sobre ítems en cada contenedor
+  bindItemActions($('#items-list'));
+  bindItemActions($('#search-results'));
+  bindItemActions($('#history-list'));
+  bindItemActions($('#super-list'));
+
+  // Búsqueda instantánea
+  $('#search-input').addEventListener('input', debounce((e) => {
+    state.search.text = e.target.value;
+    renderSearchResults();
+  }, 150));
+
+  // Filtros (toggle)
+  $('.filter-rows').addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    const { fcat, fprio, fstatus, fwhen } = chip.dataset;
+    if (fcat !== undefined)   state.search.cat    = fcat || null;
+    if (fprio !== undefined)  state.search.prio   = state.search.prio === fprio ? null : fprio;
+    if (fstatus !== undefined) state.search.status = state.search.status === fstatus ? null : fstatus;
+    if (fwhen !== undefined)  state.search.when   = state.search.when === fwhen ? null : fwhen;
+    renderSearchFilters();
+    renderSearchResults();
+  });
+
+  // Selector de usuario
+  $('#user-options').addEventListener('click', (e) => {
+    const opt = e.target.closest('.user-option');
+    if (!opt) return;
+    state.me = opt.dataset.user;
+    localStorage.setItem('nh_me', state.me);
+    $('#user-overlay').hidden = true;
+    renderAvatarBtn();
+    const me = userOf(state.me);
+    toast(`¡Hola, <b>${escapeHtml(me.name)}</b>! ${me.emoji}`, { emoji: '👋', type: 'success' });
+    requestNotifPermission();
+  });
+  $('#btn-user').addEventListener('click', showUserPicker);
+  $('#btn-edit-users').addEventListener('click', () => { $('#user-overlay').hidden = true; showSettings(); });
+
+  // Ajustes de usuarios
+  $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; showUserPicker(); });
+  $('#settings-save').addEventListener('click', async () => {
+    const updated = {};
+    $$('.settings-user').forEach((row) => {
+      const id = row.dataset.user;
+      const [emojiInput, nameInput] = row.querySelectorAll('input');
+      updated[id] = {
+        ...state.users[id],
+        emoji: emojiInput.value.trim() || state.users[id].emoji,
+        name:  nameInput.value.trim()  || state.users[id].name,
+      };
+    });
+    await saveUsers(updated);
+    state.users = updated;
+    $('#settings-overlay').hidden = true;
+    renderAvatarBtn();
+    rerender();
+    showUserPicker();
+  });
+
+  // Volver a la app: refrescar saludo y contadores
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      $('#greeting').textContent = greeting();
+      rerender();
+      checkReminders();
+    }
+  });
+
+  // Service worker (PWA)
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('[SW]', err));
+  }
+}
+
+boot();

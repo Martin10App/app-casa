@@ -1,0 +1,9 @@
+# Sistema / editores
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# Dependencias (esta app no usa build, pero por si acaso)
+node_modules/

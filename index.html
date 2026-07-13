@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nuestro Hogar</title>
+  <meta name="description" content="El pequeño centro de organización de nuestra casa: compras, recordatorios, gastos y más, sincronizado entre los dos.">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#f7f9fc" id="meta-theme">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Nuestro Hogar">
+
+  <!-- Tipografía: Fraunces (títulos cálidos) + Inter (interfaz) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ================= PORTADA (solo en Inicio) ================= -->
+  <header class="hero" id="hero">
+    <div class="hero__media">
+      <img class="hero__img" id="hero-img" alt="" aria-hidden="true">
+      <div class="hero__overlay"></div>
+    </div>
+
+    <div class="hero__top safe-top">
+      <div class="brand">
+        <span class="brand__mark">🏠</span>
+        <span class="brand__name">Nuestro Hogar</span>
+      </div>
+      <div class="hero__actions">
+        <button class="icon-btn icon-btn--glass" id="btn-theme" aria-label="Cambiar tema"></button>
+        <button class="avatar-btn" id="btn-user" aria-label="Cambiar usuario"></button>
+      </div>
+    </div>
+
+    <div class="hero__text">
+      <h1 class="hero__greeting" id="greeting">Buenos días</h1>
+      <p class="hero__phrase" id="phrase">¿Qué necesita la casa hoy?</p>
+      <div class="hero__stats" id="hero-stats"></div>
+    </div>
+  </header>
+
+  <!-- ================= CONTENIDO ================= -->
+  <main class="main" id="main">
+
+    <!-- Inicio: tarjetas grandes con imágenes -->
+    <section class="view is-active" id="view-home">
+      <div class="section-head">
+        <h2 class="section-title">La casa</h2>
+        <button class="super-btn" id="btn-super">
+          <span class="super-btn__dot"></span> Modo Supermercado
+        </button>
+      </div>
+      <div class="cards-grid" id="cards-grid"></div>
+    </section>
+
+    <!-- Lista de una categoría / grupo -->
+    <section class="view" id="view-list">
+      <header class="view-head safe-top">
+        <button class="icon-btn" data-nav="home" aria-label="Volver"></button>
+        <h2 class="view-head__title" id="list-title">Compras</h2>
+        <span class="view-head__count" id="list-count"></span>
+      </header>
+      <div class="items-list" id="items-list"></div>
+    </section>
+
+    <!-- Libreta de precios -->
+    <section class="view" id="view-prices">
+      <header class="view-head safe-top">
+        <button class="icon-btn" data-nav="home" id="prices-back" aria-label="Volver"></button>
+        <h2 class="view-head__title">Precios</h2>
+        <span class="view-head__count" id="prices-count"></span>
+      </header>
+      <p class="view-hint">Anotá lo que comprás en cada lugar y te marcamos dónde sale más barato 👑</p>
+      <div class="items-list" id="prices-list"></div>
+    </section>
+
+    <!-- Búsqueda -->
+    <section class="view" id="view-search">
+      <header class="view-head view-head--tall safe-top">
+        <h2 class="view-head__title">Buscar</h2>
+        <div class="search-bar">
+          <span class="search-bar__icon" id="search-icon"></span>
+          <input type="search" class="search-bar__input" id="search-input"
+                 placeholder="Buscar en la casa…" autocomplete="off">
+        </div>
+        <div class="filter-rows">
+          <div class="chip-row" id="filter-cats"></div>
+          <div class="chip-row" id="filter-extra"></div>
+        </div>
+      </header>
+      <div class="items-list" id="search-results"></div>
+    </section>
+
+    <!-- Historial -->
+    <section class="view" id="view-history">
+      <header class="view-head safe-top">
+        <h2 class="view-head__title">Historial</h2>
+        <span class="view-head__count" id="history-count"></span>
+      </header>
+      <div class="history-list" id="history-list"></div>
+    </section>
+
+  </main>
+
+  <!-- ================= MODO SUPERMERCADO (pantalla completa) ================= -->
+  <section class="super" id="view-super" hidden>
+    <header class="super__head safe-top">
+      <button class="icon-btn icon-btn--glass" id="super-close" aria-label="Salir del modo supermercado"></button>
+      <div>
+        <h2 class="super__title">Modo Supermercado</h2>
+        <p class="super__sub" id="super-sub">0 pendientes</p>
+      </div>
+    </header>
+    <div class="super__list" id="super-list"></div>
+  </section>
+
+  <!-- ================= NAVEGACIÓN INFERIOR ================= -->
+  <nav class="bottom-nav safe-bottom" aria-label="Navegación principal">
+    <button class="nav-btn is-active" data-nav="home">
+      <span class="nav-btn__icon" data-icon="home"></span><span class="nav-btn__label">Inicio</span>
+    </button>
+    <button class="nav-btn" data-nav="search">
+      <span class="nav-btn__icon" data-icon="search"></span><span class="nav-btn__label">Buscar</span>
+    </button>
+
+    <!-- Botón flotante central -->
+    <button class="fab" id="fab" aria-label="Agregar elemento">
+      <span data-icon="plus"></span>
+    </button>
+
+    <button class="nav-btn" data-nav="super-nav" id="nav-super">
+      <span class="nav-btn__icon" data-icon="basket"></span><span class="nav-btn__label">Súper</span>
+      <span class="nav-btn__badge" id="super-badge" hidden></span>
+    </button>
+    <button class="nav-btn" data-nav="history">
+      <span class="nav-btn__icon" data-icon="history"></span><span class="nav-btn__label">Historial</span>
+    </button>
+  </nav>
+
+  <!-- ================= SELECTOR DE USUARIO (primer uso) ================= -->
+  <div class="user-overlay" id="user-overlay" hidden>
+    <div class="user-card">
+      <span class="user-card__logo">🏠</span>
+      <h2 class="user-card__title">¿Quién sos?</h2>
+      <p class="user-card__sub">Así el otro sabe quién agregó cada cosa</p>
+      <div class="user-card__options" id="user-options"></div>
+      <button class="btn btn--ghost btn--small" id="btn-edit-users">Editar nombres</button>
+    </div>
+  </div>
+
+  <!-- ================= AJUSTES DE USUARIOS ================= -->
+  <div class="user-overlay" id="settings-overlay" hidden>
+    <div class="user-card">
+      <h2 class="user-card__title">Los de la casa</h2>
+      <p class="user-card__sub">Nombre y emoji de cada uno</p>
+      <div class="settings-users" id="settings-users"></div>
+      <div class="user-card__actions">
+        <button class="btn btn--ghost" id="settings-cancel">Cancelar</button>
+        <button class="btn btn--primary" id="settings-save">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
