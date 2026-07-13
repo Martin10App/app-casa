@@ -1015,6 +1015,71 @@ svg { width: 22px; height: 22px; }
   background: var(--bg);
   font-size: 22px; text-align: center;
 }
+.settings-user__fields { display: flex; gap: var(--sp-3); align-items: center; flex: 1; }
+
+/* Botón de foto de perfil en ajustes */
+.settings-user__photo {
+  position: relative;
+  width: 64px; height: 64px; flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid; place-items: center;
+  border: 2px solid var(--border);
+  transition: border-color var(--t-fast), transform var(--t-fast);
+}
+.settings-user__photo:hover { border-color: var(--primary); transform: scale(1.04); }
+.settings-user__photo img { width: 100%; height: 100%; object-fit: cover; }
+.settings-user__emoji-preview { font-size: 30px; }
+.settings-user__cam {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--primary); color: #fff;
+  border: 2px solid var(--surface);
+}
+.settings-user__cam svg { width: 11px; height: 11px; }
+
+/* Avatares con foto (reutilizable) */
+.avatar-mini--photo {
+  display: inline-flex;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  overflow: hidden;
+  vertical-align: -3px;
+}
+.avatar-mini--photo img { width: 100%; height: 100%; object-fit: cover; }
+
+.avatar-btn img,
+.user-option__avatar img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+}
+.avatar-btn { overflow: hidden; padding: 0; }
+.user-option__avatar { overflow: hidden; }
+
+/* Lapicito para cambiar la foto de una tarjeta del inicio */
+.home-card__edit {
+  position: absolute; bottom: var(--sp-3); right: var(--sp-3); z-index: 3;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease), background var(--t-fast);
+}
+.home-card:hover .home-card__edit,
+.home-card:focus-within .home-card__edit { opacity: 1; transform: none; }
+.home-card__edit:hover { background: var(--primary); }
+.home-card__edit svg { width: 16px; height: 16px; }
+/* En táctil (sin hover) siempre visible, sutil */
+@media (hover: none) {
+  .home-card__edit { opacity: .85; transform: none; }
+}
 
 /* ============================================================
    TOASTS

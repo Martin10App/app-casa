@@ -5,9 +5,9 @@
    reacción en tiempo real a los cambios de datos.
    ============================================================ */
 
-import { $, $$, escapeHtml, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney } from './utils/helpers.js';
+import { $, $$, escapeHtml, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribePrices, savePrice, deletePrice, isCloud } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, isCloud } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { toast } from './components/toast.js';
@@ -22,6 +22,7 @@ const DEFAULT_USERS = {
 const state = {
   items: [],
   prices: [],
+  home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
   me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
   view: 'home',
@@ -33,6 +34,14 @@ const state = {
 
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const userOf = (id) => state.users[id] || { name: '—', emoji: '👤', bg: '#eee' };
+
+/** Avatar de un usuario: foto real si la cargó, si no su emoji. */
+function avatarHtml(id, cls = 'avatar-mini') {
+  const u = userOf(id);
+  return u.photo
+    ? `<span class="${cls} ${cls}--photo"><img src="${u.photo}" alt=""></span>`
+    : `<span class="${cls}">${u.emoji}</span>`;
+}
 const pending = () => state.items.filter((i) => i.status === 'pendiente');
 const done    = () => state.items.filter((i) => i.status === 'completado');
 
@@ -103,7 +112,7 @@ function itemCardHtml(item, i) {
         <div class="item-card__meta">
           <span class="prio-tag prio-tag--${item.priority}">${PRIO_LABEL[item.priority]}</span>
           <span>${cat.emoji} ${cat.label}</span>
-          <span>· <span class="avatar-mini">${by.emoji}</span> ${escapeHtml(by.name)} · ${timeAgo(item.createdAt)}</span>
+          <span>· ${avatarHtml(item.createdBy)} ${escapeHtml(by.name)} · ${timeAgo(item.createdAt)}</span>
           ${item.amount ? `<span class="item-card__amount">${fmtMoney(item.amount)}</span>` : ''}
           ${item.dueDate ? `<span class="item-card__due ${item.dueDate < today ? 'is-late' : ''}">⏰ ${fmtDate(item.dueDate + 'T12:00')}</span>` : ''}
         </div>
@@ -129,12 +138,15 @@ function renderHome() {
     const count = card.special === 'prices'
       ? state.prices.length
       : p.filter((it) => card.cats.includes(it.category)).length;
+    const customPhoto = state.home.cards?.[card.id];
+    const imgSrc = customPhoto || card.img;
     return `
       <button class="home-card" data-card="${card.id}" style="--card-hue:${card.hue}; --i:${i}" aria-label="${card.label}, ${count} pendientes">
-        <img class="home-card__img" src="${card.img}" alt="" loading="lazy"
+        <img class="home-card__img" src="${imgSrc}" alt="" loading="lazy"
              onload="this.classList.add('is-loaded')" onerror="this.remove()">
         <span class="home-card__icon">${ICONS[card.icon]}</span>
         <span class="home-card__count ${count ? '' : 'is-zero'}">${count}</span>
+        <span class="home-card__edit" data-edit-card="${card.id}" role="button" tabindex="0" aria-label="Cambiar foto de ${card.label}">${ICONS.camera}</span>
         <span class="home-card__body">
           <span class="home-card__label">${card.label}</span>
           <span class="home-card__tagline">${card.tagline}</span>
@@ -217,7 +229,7 @@ function renderHistory() {
           <div class="history-item__body">
             <div class="history-item__name">${escapeHtml(item.name)}${item.qty > 1 ? ` ×${item.qty}` : ''}</div>
             <div class="history-item__meta">
-              ${by.emoji} agregó <b>${escapeHtml(by.name)}</b> · ${doneBy.emoji} completó <b>${escapeHtml(doneBy.name)}</b> · ${fmtTime(item.completedAt)}
+              ${avatarHtml(item.createdBy)} agregó <b>${escapeHtml(by.name)}</b> · ${avatarHtml(item.completedBy)} completó <b>${escapeHtml(doneBy.name)}</b> · ${fmtTime(item.completedAt)}
               ${item.amount ? ` · <b>${fmtMoney(item.amount)}</b>` : ''}
             </div>
           </div>
@@ -367,29 +379,60 @@ function checkReminders() {
     });
 }
 
+/* ================= Fotos de tarjetas ================= */
+/** Abre el selector de archivos y guarda la foto elegida en la tarjeta. */
+function pickCardPhoto(cardId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      toast('Procesando foto…', { emoji: '⏳', duration: 1500 });
+      const dataUrl = await compressImage(file, 1000, 0.72);
+      const cards = { ...(state.home.cards || {}), [cardId]: dataUrl };
+      await saveHome({ cards });
+      toast('Foto actualizada ✓', { emoji: '📸', type: 'success' });
+    } catch (err) {
+      console.error(err);
+      toast('No se pudo procesar la foto', { emoji: '⚠️' });
+    }
+  };
+  input.click();
+}
+
 /* ================= Usuarios ================= */
 function renderAvatarBtn() {
   const me = userOf(state.me);
   const btn = $('#btn-user');
-  btn.textContent = me.emoji;
   btn.style.setProperty('--avatar-bg', me.bg);
   btn.title = me.name;
+  btn.innerHTML = me.photo ? `<img src="${me.photo}" alt="">` : me.emoji;
 }
 
 function showUserPicker() {
   $('#user-options').innerHTML = Object.entries(state.users).map(([id, u]) => `
     <button class="user-option" data-user="${id}" style="--user-bg:${u.bg}">
-      <span class="user-option__avatar" style="--user-bg:${u.bg}; background:${u.bg}">${u.emoji}</span>
+      <span class="user-option__avatar" style="--user-bg:${u.bg}; background:${u.bg}">${u.photo ? `<img src="${u.photo}" alt="">` : u.emoji}</span>
       <span class="user-option__name">${escapeHtml(u.name)}</span>
     </button>`).join('');
   $('#user-overlay').hidden = false;
 }
 
+let settingsPhotos = {};  // fotos elegidas en ajustes, sin guardar aún: { [userId]: dataURL }
 function showSettings() {
+  settingsPhotos = {};
   $('#settings-users').innerHTML = Object.entries(state.users).map(([id, u]) => `
     <div class="settings-user" data-user="${id}">
-      <input class="settings-user__emoji" maxlength="4" value="${escapeHtml(u.emoji)}" aria-label="Emoji">
-      <input class="field__input" maxlength="20" value="${escapeHtml(u.name)}" aria-label="Nombre">
+      <button type="button" class="settings-user__photo" data-photo-user="${id}" style="background:${u.bg}" aria-label="Cambiar foto de ${escapeHtml(u.name)}">
+        ${u.photo ? `<img src="${u.photo}" alt="">` : `<span class="settings-user__emoji-preview">${u.emoji}</span>`}
+        <span class="settings-user__cam">${ICONS.camera}</span>
+      </button>
+      <div class="settings-user__fields">
+        <input class="settings-user__emoji" maxlength="4" value="${escapeHtml(u.emoji)}" aria-label="Emoji" placeholder="👤">
+        <input class="field__input" maxlength="20" value="${escapeHtml(u.name)}" aria-label="Nombre" placeholder="Nombre">
+      </div>
     </div>`).join('');
   $('#settings-overlay').hidden = false;
 }
@@ -451,6 +494,11 @@ async function boot() {
     if (state.view === 'home') renderHome();
   });
 
+  subscribeHome((home) => {
+    state.home = { cards: {}, ...home };
+    if (state.view === 'home') renderHome();
+  });
+
   // Usuario actual
   if (state.me && state.users[state.me]) {
     renderAvatarBtn();
@@ -505,6 +553,10 @@ async function boot() {
 
   // Tarjetas del inicio
   $('#cards-grid').addEventListener('click', (e) => {
+    // Lapicito de foto: cambiar la imagen de la tarjeta
+    const editEl = e.target.closest('[data-edit-card]');
+    if (editEl) { e.stopPropagation(); pickCardPhoto(editEl.dataset.editCard); return; }
+
     const cardEl = e.target.closest('.home-card');
     if (!cardEl) return;
     const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
@@ -559,6 +611,29 @@ async function boot() {
 
   // Ajustes de usuarios
   $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; showUserPicker(); });
+
+  // Tocar el avatar en ajustes → elegir foto
+  $('#settings-users').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-photo-user]');
+    if (!btn) return;
+    const id = btn.dataset.photoUser;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await compressImage(file, 512, 0.8);
+        settingsPhotos[id] = dataUrl;
+        btn.innerHTML = `<img src="${dataUrl}" alt=""><span class="settings-user__cam">${ICONS.camera}</span>`;
+      } catch {
+        toast('No se pudo procesar la foto', { emoji: '⚠️' });
+      }
+    };
+    input.click();
+  });
+
   $('#settings-save').addEventListener('click', async () => {
     const updated = {};
     $$('.settings-user').forEach((row) => {
@@ -568,6 +643,7 @@ async function boot() {
         ...state.users[id],
         emoji: emojiInput.value.trim() || state.users[id].emoji,
         name:  nameInput.value.trim()  || state.users[id].name,
+        ...(settingsPhotos[id] ? { photo: settingsPhotos[id] } : {}),
       };
     });
     await saveUsers(updated);

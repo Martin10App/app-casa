@@ -57,6 +57,7 @@ async function createCloudAdapter() {
   const itemsCol  = fs.collection(db, 'items');
   const pricesCol = fs.collection(db, 'prices');
   const usersDoc  = fs.doc(db, 'meta', 'users');
+  const homeDoc   = fs.doc(db, 'meta', 'home');
 
   return {
     name: 'nube',
@@ -111,6 +112,15 @@ async function createCloudAdapter() {
       await fs.setDoc(usersDoc, users);
     },
 
+    /* ---- Personalización del inicio (fotos de tarjetas, portada) ---- */
+    subscribeHome(cb) {
+      return fs.onSnapshot(homeDoc, (snap) => { if (snap.exists()) cb(snap.data()); });
+    },
+
+    async saveHome(data) {
+      await fs.setDoc(homeDoc, data, { merge: true });
+    },
+
     /* ---- Libreta de precios ---- */
     subscribePrices(cb) {
       const q = fs.query(pricesCol, fs.orderBy('updatedAt', 'desc'), fs.limit(300));
@@ -143,7 +153,8 @@ function createLocalAdapter() {
   const KEY_ITEMS  = 'nh_items';
   const KEY_USERS  = 'nh_users';
   const KEY_PRICES = 'nh_prices';
-  const listeners = { items: new Set(), users: new Set(), prices: new Set() };
+  const KEY_HOME   = 'nh_home';
+  const listeners = { items: new Set(), users: new Set(), prices: new Set(), home: new Set() };
 
   const read  = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
   const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -160,12 +171,17 @@ function createLocalAdapter() {
     const list = read(KEY_PRICES, []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     listeners.prices.forEach((cb) => cb(list));
   }
+  function emitHome() {
+    const data = read(KEY_HOME, null);
+    if (data) listeners.home.forEach((cb) => cb(data));
+  }
 
   // Cambios hechos en otra pestaña del mismo navegador
   window.addEventListener('storage', (e) => {
     if (e.key === KEY_ITEMS)  emitItems();
     if (e.key === KEY_USERS)  emitUsers();
     if (e.key === KEY_PRICES) emitPrices();
+    if (e.key === KEY_HOME)   emitHome();
   });
 
   return {
@@ -202,6 +218,15 @@ function createLocalAdapter() {
     subscribeUsers(cb) { listeners.users.add(cb); emitUsers(); return () => listeners.users.delete(cb); },
 
     async saveUsers(users) { write(KEY_USERS, users); emitUsers(); },
+
+    /* ---- Personalización del inicio ---- */
+    subscribeHome(cb) { listeners.home.add(cb); emitHome(); return () => listeners.home.delete(cb); },
+
+    async saveHome(data) {
+      const current = read(KEY_HOME, {});
+      write(KEY_HOME, { ...current, ...data });
+      emitHome();
+    },
 
     /* ---- Libreta de precios ---- */
     subscribePrices(cb) { listeners.prices.add(cb); emitPrices(); return () => listeners.prices.delete(cb); },
@@ -251,6 +276,8 @@ export const restoreItem    = (id)          => adapter.restoreItem(id);
 export const deleteItem     = (id)          => adapter.deleteItem(id);
 export const subscribeUsers = (cb)          => adapter.subscribeUsers(cb);
 export const saveUsers      = (users)       => adapter.saveUsers(users);
+export const subscribeHome  = (cb)          => adapter.subscribeHome(cb);
+export const saveHome       = (data)        => adapter.saveHome(data);
 export const subscribePrices = (cb)         => adapter.subscribePrices(cb);
 export const savePrice      = (product)     => adapter.savePrice(product);
 export const deletePrice    = (id)          => adapter.deletePrice(id);
