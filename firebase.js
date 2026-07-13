@@ -17,12 +17,12 @@
 /* 🔑 PEGÁ ACÁ TU CONFIGURACIÓN DE FIREBASE (Consola → Configuración
    del proyecto → Tus apps → SDK de Firebase → Configuración) */
 const FIREBASE_CONFIG = {
-  apiKey:            "TU_API_KEY",
-  authDomain:        "TU_PROYECTO.firebaseapp.com",
-  projectId:         "TU_PROYECTO",
-  storageBucket:     "TU_PROYECTO.appspot.com",
-  messagingSenderId: "TU_SENDER_ID",
-  appId:             "TU_APP_ID",
+  apiKey:            "AIzaSyAVvQ4_JoouZ-3jDEFOaVzwVSgz1dxRpxk",
+  authDomain:        "app-casa-261f3.firebaseapp.com",
+  projectId:         "app-casa-261f3",
+  storageBucket:     "app-casa-261f3.firebasestorage.app",
+  messagingSenderId: "159310526936",
+  appId:             "1:159310526936:web:27100ffce1bab07579daad",
 };
 
 /** ¿Hay configuración real de Firebase? */
