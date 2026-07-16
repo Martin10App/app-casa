@@ -11,6 +11,7 @@ import { initData, subscribeItems, addItem, updateItem, completeItem, restoreIte
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
+import { initVoice, openVoice } from './components/voice.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 
@@ -634,6 +635,21 @@ async function boot() {
     }),
   });
 
+  // Anotar por voz 🎙️
+  initVoice({
+    getMe: () => state.me,
+    addItems: async (items) => {
+      for (const it of items) {
+        await addItem({
+          id: uid(), name: it.name, detail: '', category: it.category || 'compras',
+          priority: it.priority || 'media', qty: it.qty || 1,
+          amount: it.amount || null, dueDate: it.dueDate || null, photo: null,
+          status: 'pendiente', completedBy: null, completedAt: null, createdBy: state.me,
+        });
+      }
+    },
+  });
+
   // Libreta de precios
   initPrices({
     getPrices: () => state.prices,
@@ -683,6 +699,9 @@ async function boot() {
   // Modo supermercado
   $('#btn-super').addEventListener('click', openSuper);
   $('#super-close').addEventListener('click', closeSuper);
+
+  // Botón de voz
+  $('#voice-fab').addEventListener('click', openVoice);
 
   // Acciones sobre ítems en cada contenedor
   bindItemActions($('#items-list'));
