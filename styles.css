@@ -582,6 +582,71 @@ svg { width: 22px; height: 22px; }
 .history-item__actions { display: flex; gap: 2px; }
 
 /* ============================================================
+   INVENTARIO
+   ============================================================ */
+.view-head__row { display: flex; align-items: center; gap: var(--sp-3); }
+.view-head__row .view-head__title { flex: 1; }
+
+.inv-card {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-m);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-s);
+  position: relative; overflow: hidden;
+  animation: rise .35s var(--ease) both;
+  transition: box-shadow var(--t-med) var(--ease), transform var(--t-med) var(--ease);
+}
+.inv-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-m); }
+.inv-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--st-color); border-radius: 0 4px 4px 0;
+}
+.inv-card__tile {
+  width: 50px; height: 50px; flex: none;
+  border-radius: 13px; display: grid; place-items: center;
+  font-size: 25px;
+}
+.inv-card__body { flex: 1; min-width: 0; }
+.inv-card__name { font-weight: 600; font-size: 15.5px; letter-spacing: -.01em; }
+.inv-card__meta { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+
+.inv-status {
+  flex: none;
+  min-height: 40px; padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13.5px; font-weight: 700;
+  transition: transform var(--t-fast) var(--ease), filter var(--t-fast);
+  white-space: nowrap;
+}
+.inv-status:hover { filter: brightness(.97); }
+.inv-status:active { transform: scale(.93); }
+
+.inv-toshop {
+  flex: none;
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--primary-soft); color: var(--primary);
+  transition: transform var(--t-fast), filter var(--t-fast);
+}
+.inv-toshop:hover { filter: brightness(.96); }
+.inv-toshop:active { transform: scale(.9); }
+.inv-toshop svg { width: 19px; height: 19px; }
+
+/* Segmentos de estado en el modal */
+.inv-seg {
+  flex: 1; min-height: 42px;
+  border-radius: 10px;
+  font-size: 13px; font-weight: 600; color: var(--text-3);
+  transition: all var(--t-fast) var(--ease);
+}
+.inv-seg--tengo.is-active   { background: var(--green); color: #fff; box-shadow: 0 3px 10px rgba(23,166,115,.35); }
+.inv-seg--poco.is-active    { background: var(--amber); color: #fff; box-shadow: 0 3px 10px rgba(217,147,13,.35); }
+.inv-seg--agotado.is-active { background: var(--red);   color: #fff; box-shadow: 0 3px 10px rgba(224,72,72,.35); }
+
+/* ============================================================
    LIBRETA DE PRECIOS
    ============================================================ */
 .view-hint {

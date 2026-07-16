@@ -5,11 +5,12 @@
    reacción en tiempo real a los cambios de datos.
    ============================================================ */
 
-import { $, $$, escapeHtml, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
+import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, isCloud, authEnabled, onAuthChange, signIn, signOutUser } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, isCloud, authEnabled, onAuthChange, signIn, signOutUser } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
+import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 
@@ -32,6 +33,7 @@ const ALLOWED_USERS = {
 const state = {
   items: [],
   prices: [],
+  inventory: [],
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
   me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
@@ -147,6 +149,8 @@ function renderHome() {
   $('#cards-grid').innerHTML = HOME_CARDS.map((card, i) => {
     const count = card.special === 'prices'
       ? state.prices.length
+      : card.special === 'inventory'
+      ? state.inventory.filter((i) => i.status !== 'tengo').length
       : p.filter((it) => card.cats.includes(it.category)).length;
     const customPhoto = state.home.cards?.[card.id];
     const imgSrc = customPhoto || card.img;
@@ -284,6 +288,7 @@ function show(view) {
   if (view === 'home') renderHome();
   if (view === 'list') renderList();
   if (view === 'prices') renderPrices();
+  if (view === 'inventory') renderInventory();
   if (view === 'search') { renderSearchFilters(); renderSearchResults(); }
   if (view === 'history') renderHistory();
 }
@@ -459,12 +464,29 @@ function rerender() {
   if (state.view === 'home') renderHome();
   if (state.view === 'list') renderList();
   if (state.view === 'prices') renderPrices();
+  if (state.view === 'inventory') renderInventory();
   if (state.view === 'search') renderSearchResults();
   if (state.view === 'history') renderHistory();
   if (!$('#view-super').hidden) renderSuper();
 }
 
 /* ================= Login: pantalla de acceso ================= */
+/** Navegadores dentro de otras apps (WhatsApp, Instagram…) bloquean el login de Google */
+function isInAppBrowser() {
+  const ua = navigator.userAgent || '';
+  return /WhatsApp|Instagram|FBAN|FBAV|FB_IAB|Messenger|Line\/|TikTok|Snapchat/i.test(ua);
+}
+
+function showInAppBrowserHelp() {
+  const overlay = $('#auth-overlay');
+  overlay.hidden = false;
+  $('#auth-title').textContent = 'Abrí la app en tu navegador';
+  $('#auth-sub').innerHTML = 'Estás abriendo el enlace <b>dentro de otra app</b> (como WhatsApp) y ahí Google no deja iniciar sesión.<br><br>Tocá el botón de <b>compartir</b> o los <b>tres puntitos</b> (⋯) y elegí <b>“Abrir en Safari”</b> (o Chrome). O copiá el enlace y pegalo en el navegador.';
+  $('#auth-google').hidden = true;
+  $('#auth-copylink').hidden = false;
+  $('#auth-signout').hidden = true;
+}
+
 function showAuthGate(mode, email = '') {
   const overlay = $('#auth-overlay');
   overlay.hidden = false;
@@ -512,6 +534,12 @@ function startApp() {
     if (state.view === 'home') renderHome();
   });
 
+  subscribeInventory((inv) => {
+    state.inventory = inv;
+    if (state.view === 'inventory') renderInventory();
+    if (state.view === 'home') renderHome();
+  });
+
   // Usuario actual (en modo nube ya viene del login; en local, elegir)
   if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
     renderAvatarBtn();
@@ -526,6 +554,8 @@ async function boot() {
   $$('[data-icon]').forEach((el) => { el.innerHTML = ICONS[el.dataset.icon] || ''; });
   $('[data-nav="home"]', $('#view-list')).innerHTML = ICONS.back;
   $('#prices-back').innerHTML = ICONS.back;
+  $('#inv-back').innerHTML = ICONS.back;
+  $('#inv-search-icon').innerHTML = ICONS.search;
   $('#search-icon').innerHTML = ICONS.search;
   $('#super-close').innerHTML = ICONS.close;
 
@@ -549,6 +579,13 @@ async function boot() {
       } finally { btn.disabled = false; }
     });
     $('#auth-signout').addEventListener('click', () => signOutUser());
+    $('#auth-copylink').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(location.href); toast('Enlace copiado ✓ Pegalo en Safari', { emoji: '📋', type: 'success' }); }
+      catch { toast('Copiá el enlace desde la barra de arriba', { emoji: '📋' }); }
+    });
+
+    // Dentro de WhatsApp/Instagram el login no funciona → guiamos a abrir en el navegador
+    if (isInAppBrowser()) { showInAppBrowserHelp(); return; }
 
     onAuthChange((user) => {
       if (!user) { showAuthGate('signin'); return; }
@@ -582,6 +619,21 @@ async function boot() {
     toast('Elemento eliminado', { emoji: '🗑️' });
   });
 
+  // Inventario
+  initInventory({
+    getInventory: () => state.inventory,
+    getUsers: () => state.users,
+    getMe: () => state.me,
+    saveInventoryItem,
+    deleteInventoryItem,
+    isDark,
+    addToShopping: (invItem) => addItem({
+      id: uid(), name: invItem.name, detail: '', category: invItem.category || 'compras',
+      priority: 'media', qty: 1, amount: null, dueDate: null, photo: null,
+      status: 'pendiente', completedBy: null, completedAt: null, createdBy: state.me,
+    }),
+  });
+
   // Libreta de precios
   initPrices({
     getPrices: () => state.prices,
@@ -603,10 +655,12 @@ async function boot() {
   );
   $('[data-nav="home"]', $('#view-list')).addEventListener('click', () => show('home'));
   $('#prices-back').addEventListener('click', () => show('home'));
+  $('#inv-back').addEventListener('click', () => show('home'));
 
   // FAB → en la libreta de precios abre el modal de precios; si no, el de elementos
   $('#fab').addEventListener('click', () => {
     if (state.view === 'prices') { openPriceModal(); return; }
+    if (state.view === 'inventory') { openInventoryModal(); return; }
     const card = state.view === 'list' ? HOME_CARDS.find((c) => c.id === state.activeCard) : null;
     openModal(card ? card.cats[0] : null);
   });
@@ -621,6 +675,7 @@ async function boot() {
     if (!cardEl) return;
     const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
     if (card?.special === 'prices') { show('prices'); return; }
+    if (card?.special === 'inventory') { show('inventory'); return; }
     state.activeCard = cardEl.dataset.card;
     show('list');
   });

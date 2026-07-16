@@ -58,6 +58,7 @@ async function createCloudAdapter() {
 
   const itemsCol  = fs.collection(db, 'items');
   const pricesCol = fs.collection(db, 'prices');
+  const invCol    = fs.collection(db, 'inventory');
   const usersDoc  = fs.doc(db, 'meta', 'users');
   const homeDoc   = fs.doc(db, 'meta', 'home');
 
@@ -173,6 +174,27 @@ async function createCloudAdapter() {
     async deletePrice(id) {
       await fs.deleteDoc(fs.doc(pricesCol, id));
     },
+
+    /* ---- Inventario (lo que hay en casa) ---- */
+    subscribeInventory(cb) {
+      const q = fs.query(invCol, fs.orderBy('updatedAt', 'desc'), fs.limit(500));
+      return fs.onSnapshot(q, (snap) => {
+        const list = snap.docs.map((d) => {
+          const data = d.data();
+          return { ...data, id: d.id, updatedAt: data.updatedAt?.toMillis?.() ?? data.updatedAt ?? Date.now() };
+        });
+        cb(list);
+      }, (err) => console.error('[Firestore] error de inventario:', err));
+    },
+
+    async saveInventoryItem(item) {
+      const { id, ...data } = item;
+      await fs.setDoc(fs.doc(invCol, id), { ...data, updatedAt: fs.serverTimestamp() });
+    },
+
+    async deleteInventoryItem(id) {
+      await fs.deleteDoc(fs.doc(invCol, id));
+    },
   };
 }
 
@@ -186,7 +208,8 @@ function createLocalAdapter() {
   const KEY_USERS  = 'nh_users';
   const KEY_PRICES = 'nh_prices';
   const KEY_HOME   = 'nh_home';
-  const listeners = { items: new Set(), users: new Set(), prices: new Set(), home: new Set() };
+  const KEY_INV    = 'nh_inventory';
+  const listeners = { items: new Set(), users: new Set(), prices: new Set(), home: new Set(), inv: new Set() };
 
   const read  = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
   const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -207,6 +230,10 @@ function createLocalAdapter() {
     const data = read(KEY_HOME, null);
     if (data) listeners.home.forEach((cb) => cb(data));
   }
+  function emitInv() {
+    const list = read(KEY_INV, []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    listeners.inv.forEach((cb) => cb(list));
+  }
 
   // Cambios hechos en otra pestaña del mismo navegador
   window.addEventListener('storage', (e) => {
@@ -214,6 +241,7 @@ function createLocalAdapter() {
     if (e.key === KEY_USERS)  emitUsers();
     if (e.key === KEY_PRICES) emitPrices();
     if (e.key === KEY_HOME)   emitHome();
+    if (e.key === KEY_INV)    emitInv();
   });
 
   return {
@@ -282,6 +310,23 @@ function createLocalAdapter() {
       write(KEY_PRICES, read(KEY_PRICES, []).filter((p) => p.id !== id));
       emitPrices();
     },
+
+    /* ---- Inventario ---- */
+    subscribeInventory(cb) { listeners.inv.add(cb); emitInv(); return () => listeners.inv.delete(cb); },
+
+    async saveInventoryItem(item) {
+      const list = read(KEY_INV, []);
+      const idx = list.findIndex((p) => p.id === item.id);
+      const doc = { ...item, updatedAt: Date.now() };
+      if (idx >= 0) list[idx] = doc; else list.push(doc);
+      write(KEY_INV, list);
+      emitInv();
+    },
+
+    async deleteInventoryItem(id) {
+      write(KEY_INV, read(KEY_INV, []).filter((p) => p.id !== id));
+      emitInv();
+    },
   };
 }
 
@@ -319,6 +364,9 @@ export const saveHome       = (data)        => adapter.saveHome(data);
 export const subscribePrices = (cb)         => adapter.subscribePrices(cb);
 export const savePrice      = (product)     => adapter.savePrice(product);
 export const deletePrice    = (id)          => adapter.deletePrice(id);
+export const subscribeInventory   = (cb)    => adapter.subscribeInventory(cb);
+export const saveInventoryItem    = (item)  => adapter.saveInventoryItem(item);
+export const deleteInventoryItem  = (id)    => adapter.deleteInventoryItem(id);
 export const authEnabled    = ()            => adapter.authEnabled;
 export const onAuthChange   = (cb)          => adapter.onAuthChange(cb);
 export const signIn         = ()            => adapter.signIn();
