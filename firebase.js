@@ -48,6 +48,7 @@ async function createCloudAdapter() {
   const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
   const fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
   const authMod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+  const msgMod  = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js');
 
   const app = initializeApp(FIREBASE_CONFIG);
   // Cache local persistente: la app abre al instante y aguanta cortes de internet
@@ -61,6 +62,7 @@ async function createCloudAdapter() {
   const invCol    = fs.collection(db, 'inventory');
   const usersDoc  = fs.doc(db, 'meta', 'users');
   const homeDoc   = fs.doc(db, 'meta', 'home');
+  const tokensDoc = fs.doc(db, 'meta', 'tokens');
 
   return {
     name: 'nube',
@@ -143,6 +145,50 @@ async function createCloudAdapter() {
 
     async saveUsers(users) {
       await fs.setDoc(usersDoc, users);
+    },
+
+    /* ---- Notificaciones push (Firebase Cloud Messaging) ---- */
+    pushSupported() {
+      return 'Notification' in window && 'serviceWorker' in navigator && msgMod.isSupported !== undefined;
+    },
+
+    /** Pide permiso, obtiene el token del dispositivo y lo guarda para este usuario. */
+    async enablePush(vapidKey, userId) {
+      if (!(await msgMod.isSupported())) return { ok: false, reason: 'no-soportado' };
+      if (Notification.permission === 'denied') return { ok: false, reason: 'bloqueado' };
+      const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (perm !== 'granted') return { ok: false, reason: 'sin-permiso' };
+
+      // Ámbito propio: si lo registráramos en la raíz pisaríamos al sw.js
+      // que hace andar la app sin conexión.
+      const reg = await navigator.serviceWorker.register('firebase-messaging-sw.js', {
+        scope: './firebase-cloud-messaging-push-scope',
+      });
+      const messaging = msgMod.getMessaging(app);
+      const token = await msgMod.getToken(messaging, { vapidKey, serviceWorkerRegistration: reg });
+      if (!token) return { ok: false, reason: 'sin-token' };
+
+      // Guardamos el token bajo el usuario (varios dispositivos posibles)
+      await fs.setDoc(tokensDoc, { [userId]: fs.arrayUnion(token) }, { merge: true });
+      return { ok: true, token };
+    },
+
+    /** Avisos que llegan con la app abierta */
+    onPushForeground(cb) {
+      msgMod.isSupported().then((ok) => {
+        if (!ok) return;
+        msgMod.onMessage(msgMod.getMessaging(app), (payload) => cb(payload));
+      });
+    },
+
+    /** Tokens de todos los usuarios (para saber a quién mandarle) */
+    subscribeTokens(cb) {
+      return fs.onSnapshot(tokensDoc, (snap) => cb(snap.exists() ? snap.data() : {}));
+    },
+
+    /** Saca un token que ya no sirve */
+    async removeToken(userId, token) {
+      await fs.setDoc(tokensDoc, { [userId]: fs.arrayRemove(token) }, { merge: true });
     },
 
     /* ---- Personalización del inicio (fotos de tarjetas, portada) ---- */
@@ -252,6 +298,13 @@ function createLocalAdapter() {
     onAuthChange(cb) { cb({ local: true }); return () => {}; },
     async signIn() {},
     async signOutUser() {},
+
+    /* ---- Push: no aplica en modo local ---- */
+    pushSupported() { return false; },
+    async enablePush() { return { ok: false, reason: 'modo-local' }; },
+    onPushForeground() {},
+    subscribeTokens(cb) { cb({}); return () => {}; },
+    async removeToken() {},
 
     subscribeItems(cb) { listeners.items.add(cb); emitItems(); return () => listeners.items.delete(cb); },
 
@@ -371,3 +424,8 @@ export const authEnabled    = ()            => adapter.authEnabled;
 export const onAuthChange   = (cb)          => adapter.onAuthChange(cb);
 export const signIn         = ()            => adapter.signIn();
 export const signOutUser    = ()            => adapter.signOutUser();
+export const pushSupported     = ()               => adapter.pushSupported();
+export const enablePush        = (vapid, userId)  => adapter.enablePush(vapid, userId);
+export const onPushForeground  = (cb)             => adapter.onPushForeground(cb);
+export const subscribeTokens   = (cb)             => adapter.subscribeTokens(cb);
+export const removeToken       = (userId, token)  => adapter.removeToken(userId, token);

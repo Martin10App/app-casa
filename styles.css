@@ -166,8 +166,14 @@ svg { width: 22px; height: 22px; }
 .auth-actions { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-5); }
 .auth-actions .btn { width: 100%; }
 
+.settings-notif {
+  display: block; width: 100%; margin: var(--sp-4) auto 0;
+  color: var(--primary); background: var(--primary-soft);
+}
+.settings-notif:hover { filter: brightness(.97); }
+
 .settings-signout {
-  display: block; margin: var(--sp-4) auto 0;
+  display: block; margin: var(--sp-3) auto 0;
   color: var(--red);
 }
 .settings-signout:hover { background: var(--red-soft); }

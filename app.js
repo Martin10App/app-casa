@@ -7,7 +7,7 @@
 
 import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, isCloud, authEnabled, onAuthChange, signIn, signOutUser } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
@@ -20,6 +20,11 @@ const DEFAULT_USERS = {
   u1: { name: 'Martín', emoji: '👨', bg: '#dbe7ff' },
   u2: { name: 'Lucía',  emoji: '👩', bg: '#ffe3dc' },
 };
+
+/* Notificaciones push: llave pública web-push (Firebase → Cloud Messaging)
+   y dirección del "cartero" que las manda. */
+const VAPID_KEY  = 'PEGAR_LLAVE_VAPID_ACA';
+const NOTIFY_API = 'https://app-casa-omega.vercel.app/api/notificar';
 
 /* Correos de Google autorizados → a qué perfil corresponde cada uno.
    Solo estas cuentas pueden entrar (la base queda cerrada a ellas).
@@ -35,6 +40,7 @@ const state = {
   items: [],
   prices: [],
   inventory: [],
+  tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
   me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
@@ -312,9 +318,11 @@ function closeSuper() {
 async function handleComplete(id, cardEl, doneClass) {
   cardEl.classList.add(doneClass);
   // Espera a que termine la animación antes de persistir
+  const item = state.items.find((it) => it.id === id);
   setTimeout(async () => {
     try {
       await completeItem(id, state.me);
+      if (item) pushToOther(`${userOf(state.me).name} completó: ${item.name}`, '¡Una cosa menos! ✅');
     } catch (err) {
       console.error(err);
       cardEl.classList.remove(doneClass);
@@ -379,6 +387,45 @@ function detectChanges(items) {
       systemNotify('Nuestro Hogar', `${by.name} completó: ${it.name}`);
     }
     state.statusMap.set(it.id, it.status);
+  }
+}
+
+/* ================= Notificaciones push (al otro) ================= */
+const otherUser = () => (state.me === 'u1' ? 'u2' : 'u1');
+
+/** Le manda un aviso al celular del otro, aunque tenga la app cerrada.
+    Es "dispará y seguí": si falla, no molesta al usuario. */
+function pushToOther(title, body = '') {
+  const tokens = state.tokens?.[otherUser()] || [];
+  if (!tokens.length || !authEnabled()) return;
+  fetch(NOTIFY_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tokens, title, body }),
+  }).catch((err) => console.warn('[push] no se pudo avisar:', err));
+}
+
+/** Activa las notificaciones en ESTE dispositivo (necesita gesto del usuario). */
+async function activarNotificaciones() {
+  if (!authEnabled()) { toast('Las notificaciones andan solo con la nube activada', { emoji: '📴' }); return; }
+  if (VAPID_KEY.startsWith('PEGAR_')) { toast('Falta configurar la llave de notificaciones', { emoji: '🔧' }); return; }
+  toast('Activando notificaciones…', { emoji: '🔔', duration: 1500 });
+  try {
+    const r = await enablePush(VAPID_KEY, state.me);
+    if (r.ok) {
+      toast('¡Listo! Ya te van a llegar avisos 🔔', { emoji: '✅', type: 'success' });
+    } else {
+      const msgs = {
+        'bloqueado': 'Tenés las notificaciones bloqueadas. Habilitalas en los ajustes del navegador.',
+        'sin-permiso': 'No diste permiso para las notificaciones.',
+        'no-soportado': 'Este dispositivo no soporta notificaciones. En iPhone, instalá la app en la pantalla de inicio.',
+        'sin-token': 'No se pudo registrar el dispositivo. Probá de nuevo.',
+      };
+      toast(msgs[r.reason] || 'No se pudieron activar', { emoji: '⚠️', duration: 5500 });
+    }
+  } catch (err) {
+    console.error('[push]', err);
+    toast('No se pudieron activar las notificaciones', { emoji: '⚠️' });
   }
 }
 
@@ -541,6 +588,15 @@ function startApp() {
     if (state.view === 'home') renderHome();
   });
 
+  // Buzones de notificaciones de cada uno
+  subscribeTokens((tokens) => { state.tokens = tokens || {}; });
+
+  // Aviso recibido con la app abierta → toast lindo
+  onPushForeground((payload) => {
+    const n = payload?.notification || {};
+    if (n.title) toast(`${escapeHtml(n.title)}${n.body ? ` · ${escapeHtml(n.body)}` : ''}`, { emoji: '🔔', type: 'success' });
+  });
+
   // Usuario actual (en modo nube ya viene del login; en local, elegir)
   if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
     renderAvatarBtn();
@@ -613,6 +669,7 @@ async function boot() {
     } else {
       await addItem({ ...item, createdBy: state.me });
       toast(`<b>${escapeHtml(item.name)}</b> agregado`, { emoji: '✅', type: 'success' });
+      pushToOther(`${userOf(state.me).name} agregó: ${item.name}`, CATEGORIES[item.category]?.label || '');
       requestNotifPermission();
     }
   }, async (id) => {
@@ -647,6 +704,11 @@ async function boot() {
           status: 'pendiente', completedBy: null, completedAt: null, createdBy: state.me,
         });
       }
+      const nombres = items.map((i) => i.name).slice(0, 3).join(', ');
+      pushToOther(
+        `${userOf(state.me).name} anotó ${items.length} cosa${items.length === 1 ? '' : 's'}`,
+        nombres + (items.length > 3 ? '…' : '')
+      );
     },
   });
 
@@ -744,6 +806,7 @@ async function boot() {
   $('#btn-user').addEventListener('click', () => { authEnabled() ? showSettings() : showUserPicker(); });
   $('#btn-edit-users').addEventListener('click', () => { $('#user-overlay').hidden = true; showSettings(); });
   $('#settings-signout').addEventListener('click', () => signOutUser());
+  $('#settings-notif').addEventListener('click', activarNotificaciones);
 
   // Ajustes de usuarios
   $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; if (!authEnabled()) showUserPicker(); });
