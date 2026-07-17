@@ -73,11 +73,22 @@ module.exports = async (req, res) => {
   let sa;
   try {
     sa = JSON.parse(raw);
-    // Vercel a veces guarda los saltos de línea escapados
-    if (sa.private_key.includes('\\n')) sa.private_key = sa.private_key.replace(/\\n/g, '\n');
-  } catch {
-    return res.status(500).json({ error: 'FIREBASE_SERVICE_ACCOUNT no es un JSON válido' });
+  } catch (e) {
+    // Diagnóstico seguro: nada del contenido secreto, solo la forma
+    return res.status(500).json({
+      error: 'FIREBASE_SERVICE_ACCOUNT no es un JSON válido',
+      detalle: e.message,
+      largo: raw.length,
+      empieza: raw.trim().slice(0, 1),
+      termina: raw.trim().slice(-1),
+      tieneSaltosReales: /\r|\n/.test(raw),
+    });
   }
+  if (!sa || !sa.private_key || !sa.client_email) {
+    return res.status(500).json({ error: 'Al JSON le faltan campos', campos: sa ? Object.keys(sa) : [] });
+  }
+  // Vercel a veces guarda los saltos de línea escapados
+  if (sa.private_key.includes('\\n')) sa.private_key = sa.private_key.replace(/\\n/g, '\n');
 
   try {
     const { tokens, title, body } = req.body || {};
