@@ -948,9 +948,23 @@ async function boot() {
     }
   });
 
-  // Service worker (PWA)
+  // Service worker (PWA) + auto-actualización
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('[SW]', err));
+    let refreshing = false;
+    const hadController = !!navigator.serviceWorker.controller;
+    // Cuando una versión nueva toma el control, recargamos una sola vez
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing || !hadController) return;   // no recargar en la primera instalación
+      refreshing = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      // Buscar actualizaciones al abrir y cada vez que la app vuelve al frente
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    }).catch((err) => console.warn('[SW]', err));
   }
 }
 
