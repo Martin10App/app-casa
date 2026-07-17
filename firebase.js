@@ -57,9 +57,10 @@ async function createCloudAdapter() {
   });
   const auth = authMod.getAuth(app);
 
-  const itemsCol  = fs.collection(db, 'items');
-  const pricesCol = fs.collection(db, 'prices');
-  const invCol    = fs.collection(db, 'inventory');
+  const itemsCol   = fs.collection(db, 'items');
+  const pricesCol  = fs.collection(db, 'prices');
+  const invCol     = fs.collection(db, 'inventory');
+  const comprasCol = fs.collection(db, 'compras');
   const usersDoc  = fs.doc(db, 'meta', 'users');
   const homeDoc   = fs.doc(db, 'meta', 'home');
   const tokensDoc = fs.doc(db, 'meta', 'tokens');
@@ -221,6 +222,23 @@ async function createCloudAdapter() {
       await fs.deleteDoc(fs.doc(pricesCol, id));
     },
 
+    /* ---- Compras (boletas escaneadas, con su desglose) ---- */
+    subscribeCompras(cb) {
+      const q = fs.query(comprasCol, fs.orderBy('date', 'desc'), fs.limit(200));
+      return fs.onSnapshot(q, (snap) => {
+        cb(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+      }, (err) => console.error('[Firestore] error de compras:', err));
+    },
+
+    async saveCompra(compra) {
+      const { id, ...data } = compra;
+      await fs.setDoc(fs.doc(comprasCol, id), { ...data, createdAt: fs.serverTimestamp() });
+    },
+
+    async deleteCompra(id) {
+      await fs.deleteDoc(fs.doc(comprasCol, id));
+    },
+
     /* ---- Inventario (lo que hay en casa) ---- */
     subscribeInventory(cb) {
       const q = fs.query(invCol, fs.orderBy('updatedAt', 'desc'), fs.limit(500));
@@ -255,7 +273,8 @@ function createLocalAdapter() {
   const KEY_PRICES = 'nh_prices';
   const KEY_HOME   = 'nh_home';
   const KEY_INV    = 'nh_inventory';
-  const listeners = { items: new Set(), users: new Set(), prices: new Set(), home: new Set(), inv: new Set() };
+  const KEY_COMPRAS = 'nh_compras';
+  const listeners = { items: new Set(), users: new Set(), prices: new Set(), home: new Set(), inv: new Set(), compras: new Set() };
 
   const read  = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
   const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -280,6 +299,10 @@ function createLocalAdapter() {
     const list = read(KEY_INV, []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     listeners.inv.forEach((cb) => cb(list));
   }
+  function emitCompras() {
+    const list = read(KEY_COMPRAS, []).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    listeners.compras.forEach((cb) => cb(list));
+  }
 
   // Cambios hechos en otra pestaña del mismo navegador
   window.addEventListener('storage', (e) => {
@@ -288,6 +311,7 @@ function createLocalAdapter() {
     if (e.key === KEY_PRICES) emitPrices();
     if (e.key === KEY_HOME)   emitHome();
     if (e.key === KEY_INV)    emitInv();
+    if (e.key === KEY_COMPRAS) emitCompras();
   });
 
   return {
@@ -364,6 +388,23 @@ function createLocalAdapter() {
       emitPrices();
     },
 
+    /* ---- Compras ---- */
+    subscribeCompras(cb) { listeners.compras.add(cb); emitCompras(); return () => listeners.compras.delete(cb); },
+
+    async saveCompra(compra) {
+      const list = read(KEY_COMPRAS, []);
+      const idx = list.findIndex((c) => c.id === compra.id);
+      const doc = { ...compra, createdAt: Date.now() };
+      if (idx >= 0) list[idx] = doc; else list.push(doc);
+      write(KEY_COMPRAS, list);
+      emitCompras();
+    },
+
+    async deleteCompra(id) {
+      write(KEY_COMPRAS, read(KEY_COMPRAS, []).filter((c) => c.id !== id));
+      emitCompras();
+    },
+
     /* ---- Inventario ---- */
     subscribeInventory(cb) { listeners.inv.add(cb); emitInv(); return () => listeners.inv.delete(cb); },
 
@@ -417,6 +458,9 @@ export const saveHome       = (data)        => adapter.saveHome(data);
 export const subscribePrices = (cb)         => adapter.subscribePrices(cb);
 export const savePrice      = (product)     => adapter.savePrice(product);
 export const deletePrice    = (id)          => adapter.deletePrice(id);
+export const subscribeCompras     = (cb)    => adapter.subscribeCompras(cb);
+export const saveCompra           = (c)     => adapter.saveCompra(c);
+export const deleteCompra         = (id)    => adapter.deleteCompra(id);
 export const subscribeInventory   = (cb)    => adapter.subscribeInventory(cb);
 export const saveInventoryItem    = (item)  => adapter.saveInventoryItem(item);
 export const deleteInventoryItem  = (id)    => adapter.deleteInventoryItem(id);

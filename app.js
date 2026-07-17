@@ -7,11 +7,12 @@
 
 import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveCompra, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
 import { initVoice, openVoice } from './components/voice.js';
+import { initBoleta, openBoleta } from './components/boleta.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 
@@ -40,6 +41,7 @@ const state = {
   items: [],
   prices: [],
   inventory: [],
+  compras: [],           // boletas escaneadas con su desglose
   tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
@@ -263,6 +265,47 @@ function renderHistory() {
   `).join('');
 }
 
+/* ================= Render: Boletas / compras ================= */
+function renderCompras() {
+  const list = state.compras;
+  const gastado = list.reduce((a, c) => a + (c.total || 0), 0);
+  $('#compras-count').textContent = list.length
+    ? `${list.length} compra${list.length === 1 ? '' : 's'} · ${fmtMoney(gastado)}`
+    : '';
+
+  $('#compras-list').innerHTML = list.length
+    ? list.map((c, i) => {
+        const by = userOf(c.createdBy);
+        const items = c.items || [];
+        return `
+          <article class="compra-card" data-id="${c.id}" style="--i:${i}">
+            <header class="compra-card__head">
+              <div class="compra-card__info">
+                <div class="compra-card__store">🏪 ${escapeHtml(c.store || 'Sin lugar')}</div>
+                <div class="compra-card__meta">${fmtDate(c.date + 'T12:00')} · ${items.length} producto${items.length === 1 ? '' : 's'} · ${by.emoji} ${escapeHtml(by.name)}</div>
+              </div>
+              <div class="compra-card__total">${fmtMoney(c.total || 0)}</div>
+            </header>
+            <details class="compra-card__detalle">
+              <summary>Ver desglose</summary>
+              <div class="compra-card__items">
+                ${items.map((it) => `
+                  <div class="compra-line">
+                    <span>${(CATEGORIES[it.category] || CATEGORIES.otros).emoji} ${escapeHtml(it.name)}${it.qty > 1 ? ` ×${it.qty}` : ''}</span>
+                    <span class="compra-line__price">${fmtMoney(it.lineTotal || it.unitPrice || 0)}</span>
+                  </div>`).join('')}
+              </div>
+              <button class="btn btn--ghost btn--small compra-del" data-action="del-compra">${ICONS.trash} Borrar compra</button>
+            </details>
+          </article>`;
+      }).join('')
+    : `<div class="empty-state">
+         <span class="empty-state__emoji">🧾</span>
+         <div class="empty-state__title">Todavía no escaneaste ninguna boleta</div>
+         <div class="empty-state__sub">Sacale foto al ticket del súper y cargamos solos el inventario, los precios y el gasto.</div>
+       </div>`;
+}
+
 /* ================= Render: Modo Supermercado ================= */
 function renderSuper() {
   const items = pending().sort((a, b) => {
@@ -296,6 +339,7 @@ function show(view) {
   if (view === 'list') renderList();
   if (view === 'prices') renderPrices();
   if (view === 'inventory') renderInventory();
+  if (view === 'compras') renderCompras();
   if (view === 'search') { renderSearchFilters(); renderSearchResults(); }
   if (view === 'history') renderHistory();
 }
@@ -513,6 +557,7 @@ function rerender() {
   if (state.view === 'list') renderList();
   if (state.view === 'prices') renderPrices();
   if (state.view === 'inventory') renderInventory();
+  if (state.view === 'compras') renderCompras();
   if (state.view === 'search') renderSearchResults();
   if (state.view === 'history') renderHistory();
   if (!$('#view-super').hidden) renderSuper();
@@ -588,6 +633,11 @@ function startApp() {
     if (state.view === 'home') renderHome();
   });
 
+  subscribeCompras((compras) => {
+    state.compras = compras;
+    if (state.view === 'compras') renderCompras();
+  });
+
   // Buzones de notificaciones de cada uno
   subscribeTokens((tokens) => { state.tokens = tokens || {}; });
 
@@ -612,6 +662,7 @@ async function boot() {
   $('[data-nav="home"]', $('#view-list')).innerHTML = ICONS.back;
   $('#prices-back').innerHTML = ICONS.back;
   $('#inv-back').innerHTML = ICONS.back;
+  $('#compras-back').innerHTML = ICONS.back;
   $('#inv-search-icon').innerHTML = ICONS.search;
   $('#search-icon').innerHTML = ICONS.search;
   $('#super-close').innerHTML = ICONS.close;
@@ -712,6 +763,26 @@ async function boot() {
     },
   });
 
+  // Escanear boletas 📸 → reparte a compras, inventario, precios y gastos
+  initBoleta({
+    getMe: () => state.me,
+    getPrices: () => state.prices,
+    getInventory: () => state.inventory,
+    savePrice,
+    saveInventoryItem,
+    saveCompra,
+    isDark,
+    addGasto: (store, total, date, cantidad) => addItem({
+      id: uid(),
+      name: `Compra en ${store}`,
+      detail: `${cantidad} producto${cantidad === 1 ? '' : 's'} · boleta escaneada`,
+      category: 'gastos', priority: 'media', qty: 1,
+      amount: total, dueDate: date, photo: null,
+      status: 'completado', completedBy: state.me, completedAt: Date.now(),
+      createdBy: state.me,
+    }),
+  });
+
   // Libreta de precios
   initPrices({
     getPrices: () => state.prices,
@@ -734,6 +805,20 @@ async function boot() {
   $('[data-nav="home"]', $('#view-list')).addEventListener('click', () => show('home'));
   $('#prices-back').addEventListener('click', () => show('home'));
   $('#inv-back').addEventListener('click', () => show('home'));
+  $('#compras-back').addEventListener('click', () => show('home'));
+  $('#btn-escanear').addEventListener('click', openBoleta);
+
+  // Borrar una compra desde su desglose
+  $('#compras-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action="del-compra"]');
+    if (!btn) return;
+    const card = btn.closest('.compra-card');
+    const compra = state.compras.find((c) => c.id === card?.dataset.id);
+    if (!compra) return;
+    if (!confirm(`¿Borrar la compra en ${compra.store}? (el inventario y los precios quedan como están)`)) return;
+    await deleteCompra(compra.id);
+    toast('Compra borrada', { emoji: '🗑️' });
+  });
 
   // FAB → en la libreta de precios abre el modal de precios; si no, el de elementos
   $('#fab').addEventListener('click', () => {
@@ -754,6 +839,7 @@ async function boot() {
     const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
     if (card?.special === 'prices') { show('prices'); return; }
     if (card?.special === 'inventory') { show('inventory'); return; }
+    if (card?.special === 'purchases') { show('compras'); return; }
     state.activeCard = cardEl.dataset.card;
     show('list');
   });
