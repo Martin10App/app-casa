@@ -23,7 +23,7 @@ const DEFAULT_USERS = {
 
 /* Notificaciones push: llave pública web-push (Firebase → Cloud Messaging)
    y dirección del "cartero" que las manda. */
-const VAPID_KEY  = 'PEGAR_LLAVE_VAPID_ACA';
+const VAPID_KEY  = 'BMgNBXFXY6duoOgmOEVtc90f8c4SUwbMmxSCBgy_pHe279qHEXH09Ijwa4bVBYqRr-RUX9CAkOxnUQ2gygMKU60';
 const NOTIFY_API = 'https://app-casa-omega.vercel.app/api/notificar';
 
 /* Correos de Google autorizados → a qué perfil corresponde cada uno.
