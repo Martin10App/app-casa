@@ -9,6 +9,10 @@
 import { $, $$, escapeHtml, uid, normalize, fmtMoney, timeAgo } from '../utils/helpers.js';
 import { ICONS, productVisual, productGradient, productGradientDark } from '../utils/images.js';
 import { toast } from './toast.js';
+import { loadSupers, nearestBranch, getLocation, fmtKm } from '../utils/supers.js';
+
+let userLoc = null;   // { lat, lon } una vez que el usuario comparte ubicación
+let supers = null;    // catálogo de supermercados cargado
 
 /* deps: { getPrices, getUsers, getMe, savePrice, deletePrice, isDark } */
 let deps = null;
@@ -32,6 +36,33 @@ function knownStores() {
 function tileHtml(name) {
   const grad = deps.isDark() ? productGradientDark(name, 'otros') : productGradient(name, 'otros');
   return `<div class="price-card__tile" style="background:${grad}">${productVisual(name, 'otros')}</div>`;
+}
+
+/** Distancia al comercio más cercano de esa cadena (si el usuario compartió ubicación) */
+function distTxt(store) {
+  if (!userLoc || !supers) return '';
+  const near = nearestBranch(store, userLoc.lat, userLoc.lon, supers);
+  return near && near.km <= 60 ? fmtKm(near.km) : '';
+}
+
+/** Pide la ubicación y activa el cálculo de distancias */
+export async function activarCercania() {
+  const btn = $('#prices-locate');
+  if (btn) { btn.disabled = true; btn.textContent = '📍 Buscando tu ubicación…'; }
+  try {
+    supers = await loadSupers();
+    userLoc = await getLocation();
+    if (btn) { btn.textContent = '📍 Distancias activadas ✓'; btn.classList.add('is-active'); }
+    toast('Listo: te muestro a qué distancia tenés cada súper', { emoji: '📍', type: 'success' });
+    renderPrices();
+  } catch (err) {
+    console.warn('[cercania]', err);
+    if (btn) { btn.disabled = false; btn.textContent = '📍 Ver a qué distancia tengo cada súper'; }
+    const msg = err?.code === 1
+      ? 'No diste permiso de ubicación. Habilitalo para ver las distancias.'
+      : 'No pude obtener tu ubicación. Probá de nuevo.';
+    toast(msg, { emoji: '⚠️', duration: 5000 });
+  }
 }
 
 /* ============================================================
@@ -64,11 +95,13 @@ export function renderPrices() {
       const by = deps.getUsers()[e.by];
       const isCheap = e.price === cheap.price;
       const diff = e.price - cheap.price;
+      const dist = distTxt(e.store);
       return `
         <div class="price-row ${isCheap ? 'is-cheap' : ''}" data-eid="${e.id}">
           <div class="price-row__store">
             ${isCheap ? '<span class="price-row__crown">👑</span>' : ''}
             <span>${escapeHtml(e.store)}</span>
+            ${dist ? `<span class="price-row__dist">📍 ${dist}</span>` : ''}
             <span class="price-row__ago">${by ? by.emoji : ''} ${timeAgo(e.date)}</span>
           </div>
           <div class="price-row__right">
@@ -85,7 +118,7 @@ export function renderPrices() {
           ${tileHtml(product.name)}
           <div class="price-card__info">
             <h3 class="price-card__name">${escapeHtml(product.name)}</h3>
-            ${cheap ? `<div class="price-card__best">Más barato en <b>${escapeHtml(cheap.store)}</b> · ${fmtMoney(cheap.price)}</div>` : ''}
+            ${cheap ? `<div class="price-card__best">Más barato en <b>${escapeHtml(cheap.store)}</b> · ${fmtMoney(cheap.price)}${distTxt(cheap.store) ? ` · a ${distTxt(cheap.store)}` : ''}</div>` : ''}
           </div>
           <button class="item-more" data-action="add-here" aria-label="Agregar precio a ${escapeHtml(product.name)}">${ICONS.plus}</button>
         </header>
@@ -251,6 +284,8 @@ function closeModal() {
 export function initPrices(dependencies) {
   deps = dependencies;
   buildModal();
+
+  $('#prices-locate').addEventListener('click', activarCercania);
 
   $('#prices-list').addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');

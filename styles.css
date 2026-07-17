@@ -769,6 +769,16 @@ svg { width: 22px; height: 22px; }
 .price-card__best { font-size: 13px; color: var(--text-2); margin-top: 1px; }
 .price-card__best b { color: var(--green); }
 
+.prices-locate { margin-bottom: var(--sp-4); }
+.prices-locate.is-active { background: var(--green-soft); color: var(--green); border-color: var(--green); }
+.price-row__dist {
+  font-size: 11px; font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft);
+  padding: 1px 7px; border-radius: 999px;
+  white-space: nowrap;
+}
+
 .price-card__saving {
   margin: 0 var(--sp-4) var(--sp-3);
   padding: 8px 12px;
