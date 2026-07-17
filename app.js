@@ -152,10 +152,28 @@ function emptyStateHtml(emoji, title, sub) {
     </div>`;
 }
 
+/* Banner destacado de "Escanear boleta" — la función estrella, arriba de todo */
+function featuredBoletaHtml() {
+  const nComp = state.compras.length;
+  return `
+    <button class="home-featured" data-card="compras-boletas" aria-label="Escanear boleta">
+      <img class="home-featured__img" src="https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80"
+           alt="" loading="lazy" onload="this.classList.add('is-loaded')" onerror="this.remove()">
+      <span class="home-featured__badge">✨ Escaneo mágico</span>
+      <span class="home-featured__body">
+        <span class="home-featured__title">📸 Escaneá tu boleta</span>
+        <span class="home-featured__sub">Sacá una foto del ticket y cargamos solos el inventario, los precios y el gasto.</span>
+        <span class="home-featured__cta">${ICONS.camera} ${nComp ? `${nComp} compra${nComp === 1 ? '' : 's'} · escanear otra` : 'Escanear ahora'}</span>
+      </span>
+    </button>`;
+}
+
 /* ================= Render: Inicio ================= */
 function renderHome() {
   const p = pending();
-  $('#cards-grid').innerHTML = HOME_CARDS.map((card, i) => {
+  const cards = HOME_CARDS.map((card, i) => {
+    // La de boletas va destacada aparte, no en la grilla
+    if (card.special === 'purchases') return '';
     const count = card.special === 'prices'
       ? state.prices.length
       : card.special === 'inventory'
@@ -176,6 +194,7 @@ function renderHome() {
         </span>
       </button>`;
   }).join('');
+  $('#cards-grid').innerHTML = featuredBoletaHtml() + cards;
   renderHeroStats();
 }
 

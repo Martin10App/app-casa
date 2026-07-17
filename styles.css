@@ -316,6 +316,72 @@ svg { width: 22px; height: 22px; }
   gap: var(--sp-4);
 }
 
+/* ---------------- Banner destacado: Escanear boleta ---------------- */
+.home-featured {
+  grid-column: 1 / -1;              /* ocupa todo el ancho */
+  position: relative;
+  display: block;
+  text-align: left;
+  min-height: 168px;
+  padding: var(--sp-5);
+  border-radius: var(--r-l);
+  overflow: hidden;
+  isolation: isolate;
+  color: #fff;
+  background: linear-gradient(120deg, #f0902f 0%, #e2542f 55%, #c0398a 120%);
+  box-shadow: 0 10px 30px rgba(226, 84, 47, .38);
+  transition: transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease);
+  animation: rise .5s var(--ease) both;
+}
+.home-featured:hover { transform: translateY(-3px); box-shadow: 0 16px 40px rgba(226, 84, 47, .48); }
+.home-featured:active { transform: scale(.99); }
+
+.home-featured__img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; z-index: -2;
+  opacity: 0; transition: opacity .7s var(--ease);
+}
+.home-featured__img.is-loaded { opacity: .28; }
+.home-featured::after {           /* velo cálido para que el texto lea siempre */
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(120deg, rgba(224,120,40,.92) 0%, rgba(200,60,90,.82) 100%);
+}
+
+.home-featured__badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.22);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  margin-bottom: var(--sp-3);
+}
+.home-featured__body { display: block; max-width: 78%; }
+.home-featured__title {
+  display: block;
+  font-family: var(--font-display);
+  font-size: clamp(22px, 6vw, 28px); font-weight: 700; letter-spacing: -.01em;
+  line-height: 1.1;
+  text-shadow: 0 2px 12px rgba(0,0,0,.2);
+}
+.home-featured__sub {
+  display: block; margin-top: 6px;
+  font-size: 13.5px; line-height: 1.45; color: rgba(255,255,255,.92);
+}
+.home-featured__cta {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: var(--sp-4);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: #fff; color: #d1452a;
+  font-weight: 700; font-size: 14px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+.home-featured__cta svg { width: 18px; height: 18px; }
+/* Ícono grande de cámara decorativo, atrás a la derecha */
+.home-featured__body::before {}
+.home-featured { --nada: 0; }
+
 .home-card {
   position: relative;
   border-radius: var(--r-l);
