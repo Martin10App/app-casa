@@ -13,7 +13,7 @@ import { initPrices, renderPrices, openPriceModal } from './components/prices.js
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
 import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
-import { loadSupers, nearestBranch, getLocation, fmtKm } from './utils/supers.js';
+import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 
@@ -156,6 +156,34 @@ function topPlaces(name, n = 3) {
 /** El lugar más conveniente para un producto: { store, price, km } o null */
 function cheapestFor(name) {
   return topPlaces(name, 1)[0] || null;
+}
+
+/** Texto compacto para comparar nombres de comercios (sin acentos ni símbolos) */
+const compactName = (s = '') => normalize(s).replace(/[^a-z0-9]/g, '');
+
+/**
+ * Súper cercanos (de los oficiales) dentro del radio que NO estén entre los
+ * comercios ya cargados (excluir). Uno por cadena, el más cercano.
+ * Para descubrir lugares nuevos donde ir a comparar. [{ name, branch, km }]
+ */
+function nearbyStores({ maxKm = RADIO_KM, exclude = [], limit = 6 } = {}) {
+  if (!state.userLoc || !state.supers) return [];
+  const { lat, lon } = state.userLoc;
+  const exSet = new Set(exclude.map(compactName).filter(Boolean));
+  const byChain = new Map();
+  for (const s of state.supers) {
+    const km = distanceKm(lat, lon, s.lat, s.lon);
+    if (km > maxKm) continue;
+    const chain = (s.c || s.n || '').trim();
+    if (!chain) continue;
+    const key = compactName(chain);
+    // Saltear si ya tenés precios de esa cadena
+    if ([...exSet].some((ex) => key.includes(ex) || ex.includes(key))) continue;
+    if (!byChain.has(key) || km < byChain.get(key).km) {
+      byChain.set(key, { name: chain, branch: s.n, km });
+    }
+  }
+  return [...byChain.values()].sort((a, b) => a.km - b.km).slice(0, limit);
 }
 
 /** Texto listo para mostrar el "más barato": "Macromercado · $62 · a 2,8 km" */
@@ -840,6 +868,8 @@ async function boot() {
     activarUbicacion,
     // Ranking de dónde comprar algo (para la consulta por voz)
     topPlaces: (name) => topPlaces(name, 3),
+    // Súper cercanos que todavía no cargaste (para descubrir dónde comparar)
+    nearbyStores: (exclude) => nearbyStores({ exclude, limit: 5 }),
     // Agregar un solo producto, opcionalmente con el lugar sugerido
     addOne: async (name, store) => {
       await addItem({

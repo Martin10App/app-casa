@@ -240,6 +240,23 @@ function renderConsulta(transcript, product) {
       ? 'Tocá dónde lo vas a comprar y lo agrego a la lista 👇'
       : '💡 Activá la ubicación (en Precios) para ordenarlo también por cercanía.';
   }
+
+  // Súper cercanos que todavía no cargaste, para ir a comparar
+  const explorados = places.map((p) => p.store);
+  const cerca = deps.nearbyStores ? deps.nearbyStores(explorados) : [];
+  if (cerca.length) {
+    list.innerHTML += `<div class="voice-explore-title">📍 Cerca tuyo (todavía sin precio)</div>` +
+      cerca.map((c) => `
+        <button class="voice-item voice-explore-place" data-store="${escapeHtml(c.name)}" data-add="${escapeHtml(product)}">
+          <span class="voice-consulta-medal">🏬</span>
+          <span class="voice-item__body">
+            <span class="voice-item__name">${escapeHtml(c.name)}</span>
+            <span class="voice-item__cat">📍 a ${fmtKmShort(c.km)} · andá y escaneá para comparar</span>
+          </span>
+        </button>`).join('');
+  } else if (places.length && deps.hasLocation && !deps.hasLocation()) {
+    // sin ubicación no podemos sugerir cercanos
+  }
   showStage('voice-consulta');
 }
 
