@@ -9,10 +9,7 @@
 import { $, $$, escapeHtml, uid, normalize, fmtMoney, timeAgo } from '../utils/helpers.js';
 import { ICONS, productVisual, productGradient, productGradientDark } from '../utils/images.js';
 import { toast } from './toast.js';
-import { loadSupers, nearestBranch, getLocation, fmtKm } from '../utils/supers.js';
-
-let userLoc = null;   // { lat, lon } una vez que el usuario comparte ubicación
-let supers = null;    // catálogo de supermercados cargado
+import { nearestBranch, fmtKm } from '../utils/supers.js';
 
 /* deps: { getPrices, getUsers, getMe, savePrice, deletePrice, isDark } */
 let deps = null;
@@ -40,29 +37,24 @@ function tileHtml(name) {
 
 /** Distancia al comercio más cercano de esa cadena (si el usuario compartió ubicación) */
 function distTxt(store) {
-  if (!userLoc || !supers) return '';
-  const near = nearestBranch(store, userLoc.lat, userLoc.lon, supers);
+  const loc = deps.getUserLoc?.();
+  const sup = deps.getSupers?.();
+  if (!loc || !sup) return '';
+  const near = nearestBranch(store, loc.lat, loc.lon, sup);
   return near && near.km <= 60 ? fmtKm(near.km) : '';
 }
 
-/** Pide la ubicación y activa el cálculo de distancias */
+/** Pide la ubicación (compartida con toda la app) y activa el cálculo de distancias */
 export async function activarCercania() {
   const btn = $('#prices-locate');
   if (btn) { btn.disabled = true; btn.textContent = '📍 Buscando tu ubicación…'; }
-  try {
-    supers = await loadSupers();
-    userLoc = await getLocation();
-    if (btn) { btn.textContent = '📍 Distancias activadas ✓'; btn.classList.add('is-active'); }
-    toast('Listo: te muestro a qué distancia tenés cada súper', { emoji: '📍', type: 'success' });
-    renderPrices();
-  } catch (err) {
-    console.warn('[cercania]', err);
-    if (btn) { btn.disabled = false; btn.textContent = '📍 Ver a qué distancia tengo cada súper'; }
-    const msg = err?.code === 1
-      ? 'No diste permiso de ubicación. Habilitalo para ver las distancias.'
-      : 'No pude obtener tu ubicación. Probá de nuevo.';
-    toast(msg, { emoji: '⚠️', duration: 5000 });
+  const ok = await deps.activarUbicacion();
+  if (btn) {
+    btn.disabled = false;
+    if (ok) { btn.textContent = '📍 Distancias activadas ✓'; btn.classList.add('is-active'); }
+    else { btn.textContent = '📍 Ver a qué distancia tengo cada súper'; }
   }
+  renderPrices();
 }
 
 /* ============================================================

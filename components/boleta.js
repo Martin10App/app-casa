@@ -111,7 +111,7 @@ function pickPhoto() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-  input.capture = 'environment';   // abre la cámara trasera en el celu
+  // Sin 'capture': así el celu te deja elegir entre sacar foto o buscar en la galería
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;

@@ -13,6 +13,7 @@ import { initPrices, renderPrices, openPriceModal } from './components/prices.js
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
 import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
+import { loadSupers, nearestBranch, getLocation, fmtKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 
@@ -42,6 +43,8 @@ const state = {
   prices: [],
   inventory: [],
   compras: [],           // boletas escaneadas con su desglose
+  userLoc: null,         // { lat, lon } cuando el usuario comparte ubicación
+  supers: null,          // catálogo de supermercados (para distancias)
   tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
@@ -120,11 +123,59 @@ function tileHtml(item, cssClass) {
 const PRIO_COLOR = { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--red)' };
 const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 
-/** Dónde sale más barato un producto, según la libreta de precios. { store, price } o null */
+const RADIO_KM = 15;   // solo recomendamos súper dentro de este radio
+
+/**
+ * Dónde conviene comprar un producto: el más barato de la libreta,
+ * pero teniendo en cuenta la cercanía. Si el usuario compartió ubicación,
+ * solo considera lugares dentro de RADIO_KM (o de ubicación desconocida,
+ * porque son lugares donde igual comprás). Devuelve { store, price, km } o null.
+ */
 function cheapestFor(name) {
   const prod = state.prices.find((p) => normalize(p.name) === normalize(name));
   if (!prod || !prod.entries?.length) return null;
-  return prod.entries.reduce((m, e) => (m == null || e.price < m.price ? e : m), null);
+
+  const { userLoc, supers } = state;
+  let candidatos = prod.entries.map((e) => {
+    let km = null;
+    if (userLoc && supers) {
+      const near = nearestBranch(e.store, userLoc.lat, userLoc.lon, supers);
+      km = near ? near.km : null;
+    }
+    return { store: e.store, price: e.price, km };
+  });
+
+  // Con ubicación: quedarse con los que están dentro del radio (o sin ubicación conocida)
+  if (userLoc && supers) {
+    const cerca = candidatos.filter((c) => c.km == null || c.km <= RADIO_KM);
+    if (cerca.length) candidatos = cerca;
+  }
+
+  return candidatos.reduce((m, c) => (m == null || c.price < m.price ? c : m), null);
+}
+
+/** Texto listo para mostrar el "más barato": "Macromercado · $62 · a 2,8 km" */
+function dealText(deal) {
+  if (!deal) return '';
+  return `${escapeHtml(deal.store)} · ${fmtMoney(deal.price)}${deal.km != null ? ` · a ${fmtKm(deal.km)}` : ''}`;
+}
+
+/** Activa la ubicación en toda la app (para recomendar por cercanía) */
+async function activarUbicacion() {
+  try {
+    state.supers = await loadSupers();
+    state.userLoc = await getLocation();
+    toast('Listo: ahora te recomiendo por precio y cercanía 📍', { emoji: '📍', type: 'success' });
+    rerender();
+    return true;
+  } catch (err) {
+    console.warn('[ubicacion]', err);
+    const msg = err?.code === 1
+      ? 'No diste permiso de ubicación. Habilitalo para recomendar por cercanía.'
+      : 'No pude obtener tu ubicación. Probá de nuevo.';
+    toast(msg, { emoji: '⚠️', duration: 5000 });
+    return false;
+  }
 }
 
 function itemCardHtml(item, i) {
@@ -138,7 +189,7 @@ function itemCardHtml(item, i) {
       <div class="item-card__body">
         <div class="item-card__name">${escapeHtml(item.name)}${item.qty > 1 ? `<span class="qty">×${item.qty}</span>` : ''}</div>
         ${item.detail ? `<div class="item-card__detail">${escapeHtml(item.detail)}</div>` : ''}
-        ${deal ? `<div class="item-card__deal">🏷️ Más barato en <b>${escapeHtml(deal.store)}</b> · ${fmtMoney(deal.price)}</div>` : ''}
+        ${deal ? `<div class="item-card__deal">🏷️ Más barato en ${dealText(deal)}</div>` : ''}
         <div class="item-card__meta">
           <span class="prio-tag prio-tag--${item.priority}">${PRIO_LABEL[item.priority]}</span>
           <span>${cat.emoji} ${cat.label}</span>
@@ -348,7 +399,7 @@ function renderSuper() {
         <div class="super-card__body">
           <div class="super-card__name">${escapeHtml(item.name)}</div>
           ${item.detail ? `<div class="super-card__detail">${escapeHtml(item.detail)}</div>` : ''}
-          ${(() => { const d = cheapestFor(item.name); return d ? `<div class="super-card__deal">🏷️ Más barato en ${escapeHtml(d.store)} · ${fmtMoney(d.price)}</div>` : ''; })()}
+          ${(() => { const d = cheapestFor(item.name); return d ? `<div class="super-card__deal">🏷️ Más barato en ${dealText(d)}</div>` : ''; })()}
           <span class="super-card__qty">×${item.qty || 1}</span>
         </div>
         <button class="super-check" data-action="super-complete" aria-label="Marcar ${escapeHtml(item.name)}">${ICONS.check}</button>
@@ -751,7 +802,7 @@ async function boot() {
       const deal = cheapestFor(item.name);
       toast(
         deal
-          ? `<b>${escapeHtml(item.name)}</b> agregado · 🏷️ más barato en ${escapeHtml(deal.store)} (${fmtMoney(deal.price)})`
+          ? `<b>${escapeHtml(item.name)}</b> agregado · 🏷️ más barato en ${dealText(deal)}`
           : `<b>${escapeHtml(item.name)}</b> agregado`,
         { emoji: '✅', type: 'success', duration: deal ? 5000 : 3800 }
       );
@@ -823,6 +874,9 @@ async function boot() {
     getPrices: () => state.prices,
     getUsers:  () => state.users,
     getMe:     () => state.me,
+    getUserLoc: () => state.userLoc,
+    getSupers:  () => state.supers,
+    activarUbicacion,
     savePrice,
     deletePrice,
     isDark,
