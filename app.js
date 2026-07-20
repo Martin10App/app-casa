@@ -198,6 +198,7 @@ async function activarUbicacion() {
   try {
     state.supers = await loadSupers();
     state.userLoc = await getLocation();
+    localStorage.setItem('nh_loc', JSON.stringify(state.userLoc));   // la recordamos
     toast('Listo: ahora te recomiendo por precio y cercanía 📍', { emoji: '📍', type: 'success' });
     rerender();
     return true;
@@ -712,6 +713,26 @@ let appStarted = false;
 function startApp() {
   if (appStarted) return;   // onAuthChange puede dispararse varias veces
   appStarted = true;
+
+  // Ubicación recordada: se marca UNA vez y la app la recuerda para siempre
+  try {
+    const savedLoc = JSON.parse(localStorage.getItem('nh_loc') || 'null');
+    if (savedLoc && typeof savedLoc.lat === 'number') state.userLoc = savedLoc;
+  } catch { /* nada */ }
+  // Cargar el mapa de súper (para las distancias) apenas arranca
+  loadSupers().then((s) => { state.supers = s; if (state.userLoc) rerender(); });
+  // Si ya diste permiso antes, refrescar la ubicación EN SILENCIO (sin pedir nada)
+  if (navigator.permissions?.query) {
+    navigator.permissions.query({ name: 'geolocation' }).then((p) => {
+      if (p.state === 'granted') {
+        getLocation().then((loc) => {
+          state.userLoc = loc;
+          localStorage.setItem('nh_loc', JSON.stringify(loc));
+          rerender();
+        }).catch(() => { /* seguimos con la guardada */ });
+      }
+    }).catch(() => {});
+  }
 
   subscribeUsers((users) => {
     state.users = { ...structuredClone(DEFAULT_USERS), ...users };

@@ -66,6 +66,13 @@ export function renderPrices() {
     ? `${list.length} producto${list.length === 1 ? '' : 's'}`
     : '';
 
+  // Si la ubicación ya está recordada, el botón lo refleja (no hay que volver a marcarla)
+  const locBtn = $('#prices-locate');
+  if (locBtn && deps.getUserLoc?.()) {
+    locBtn.textContent = '📍 Ubicación activada ✓';
+    locBtn.classList.add('is-active');
+  }
+
   const container = $('#prices-list');
   if (!list.length) {
     container.innerHTML = `
