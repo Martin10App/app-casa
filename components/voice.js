@@ -222,27 +222,44 @@ function placeRow(store, product, price, km, medal) {
     </button>`;
 }
 
-function renderConsulta(transcript, product) {
+async function renderConsulta(transcript, product) {
   $('#voice-consulta-title', overlay).textContent = `¿Dónde comprar ${product}?`;
   $('#voice-consulta-transcript', overlay).textContent = transcript ? `“${transcript}”` : '';
   const list = $('#voice-consulta-list', overlay);
   const hint = $('#voice-consulta-hint', overlay);
 
-  const places = deps.topPlaces(product);
+  // Mostramos la etapa con un "comparando…" mientras junta todo (tus precios + online)
+  list.innerHTML = `<div class="voice-online-loading">💰 Comparando precios…</div>`;
+  hint.textContent = '';
+  showStage('voice-consulta');
+
+  const all = await deps.comparePrices(product);   // ya viene ordenado de más barato a más caro
+  if (!list.isConnected || $('#voice-consulta', overlay).hidden) return;   // el usuario cerró/cambió
+
   const medals = ['🥇', '🥈', '🥉'];
   let html = '';
 
-  // 1) Tus precios (de boletas)
-  if (places.length) {
-    html += `<div class="voice-explore-title">🧾 Tus precios</div>`;
-    html += places.map((p, i) => placeRow(p.store, product, p.price, fmtKmShort(p.km), medals[i] || '•')).join('');
+  if (all.length) {
+    html += `<div class="voice-explore-title">💰 Dónde está más barato</div>`;
+    html += all.map((c, i) => {
+      const km = fmtKmShort(c.km);
+      const tag = c.source === 'online' ? '🌐 online hoy' : '🧾 tu precio';
+      return `
+        <button class="voice-item voice-consulta-place ${c.source === 'online' ? 'voice-online-place' : ''}" data-store="${escapeHtml(c.store)}" data-add="${escapeHtml(product)}">
+          <span class="voice-consulta-medal">${medals[i] || '•'}</span>
+          <span class="voice-item__body">
+            <span class="voice-item__name">${escapeHtml(c.store)}</span>
+            <span class="voice-item__cat">${tag}${km ? ` · 📍 a ${km}` : ''}</span>
+          </span>
+          <span class="voice-consulta-price">${fmtMoney(c.price)}</span>
+        </button>`;
+    }).join('');
+  } else {
+    html += `<div class="voice-consulta-empty">Todavía no tengo precios de <b>${escapeHtml(product)}</b>. Escaneá una boleta o mirá abajo qué súper tenés cerca.</div>`;
   }
 
-  // 2) Precios online en vivo (se llena solo)
-  html += `<div id="voice-online"><div class="voice-online-loading">🌐 Buscando precios online…</div></div>`;
-
-  // 3) Cerca tuyo para explorar
-  const cerca = deps.nearbyStores ? deps.nearbyStores(places.map((p) => p.store)) : [];
+  // Cerca tuyo para explorar (sin precio cargado)
+  const cerca = deps.nearbyStores ? deps.nearbyStores(all.map((c) => c.store)) : [];
   if (cerca.length) {
     html += `<div class="voice-explore-title">📍 Cerca tuyo (todavía sin precio)</div>`;
     html += cerca.map((c) => `
@@ -255,36 +272,10 @@ function renderConsulta(transcript, product) {
       </button>`).join('');
   }
 
-  // 4) Siempre: agregar a la lista
   html += `<button class="btn btn--primary voice-consulta-full" data-add="${escapeHtml(product)}">➕ Agregar a la lista</button>`;
 
   list.innerHTML = html;
-  hint.textContent = deps.hasLocation()
-    ? 'Tocá dónde lo comprás y lo agrego a la lista 👇'
-    : '💡 Activá la ubicación (en Precios) para ordenar también por cercanía.';
-
-  showStage('voice-consulta');
-  loadOnline(product);
-}
-
-/** Trae precios en vivo de tiendas online y los inserta en la consulta */
-async function loadOnline(product) {
-  const cont = $('#voice-online', overlay);
-  if (!cont || !deps.onlinePrices) { if (cont) cont.innerHTML = ''; return; }
-  let results = [];
-  try { results = await deps.onlinePrices(product); } catch { results = []; }
-  if (!cont.isConnected) return;   // el usuario ya cerró/cambió
-  if (!results.length) { cont.innerHTML = ''; return; }
-  cont.innerHTML = `<div class="voice-explore-title">🌐 Precios online hoy</div>` +
-    results.map((r) => `
-      <button class="voice-item voice-online-place" data-store="${escapeHtml(r.store)}" data-add="${escapeHtml(product)}">
-        <span class="voice-consulta-medal">🌐</span>
-        <span class="voice-item__body">
-          <span class="voice-item__name">${escapeHtml(r.store)}</span>
-          <span class="voice-item__cat">${escapeHtml((r.product || '').slice(0, 42))}</span>
-        </span>
-        <span class="voice-consulta-price">${fmtMoney(r.price)}</span>
-      </button>`).join('');
+  hint.textContent = all.length ? 'Tocá dónde lo comprás y lo agrego a la lista 👇' : '';
 }
 
 /* ---------- Revisión de lo entendido ---------- */

@@ -159,6 +159,38 @@ function cheapestFor(name) {
   return topPlaces(name, 1)[0] || null;
 }
 
+/**
+ * Compara TODAS las fuentes juntas para un producto: tus precios (boletas) +
+ * tiendas online en vivo. Devuelve una única lista ordenada de más barato a
+ * más caro: [{ store, price, km, source: 'boleta'|'online', detail }].
+ */
+async function comparePrices(name) {
+  const mine = topPlaces(name, 10).map((p) => ({ store: p.store, price: p.price, km: p.km, source: 'boleta' }));
+
+  let online = [];
+  try {
+    const r = await fetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
+    if (r.ok) {
+      const d = await r.json();
+      online = (d.results || []).map((x) => ({
+        store: x.store,
+        price: x.price,
+        detail: x.product,
+        source: 'online',
+        km: (state.userLoc && state.supers) ? (nearestBranch(x.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null) : null,
+      }));
+    }
+  } catch { /* sin online, seguimos con lo tuyo */ }
+
+  // Unir y sacar duplicados por comercio (si está en los dos, gana el online = precio de hoy)
+  const byStore = new Map();
+  for (const c of [...online, ...mine]) {
+    const k = normalize(c.store);
+    if (!byStore.has(k)) byStore.set(k, c);
+  }
+  return [...byStore.values()].sort((a, b) => a.price - b.price);
+}
+
 /** Texto compacto para comparar nombres de comercios (sin acentos ni símbolos) */
 const compactName = (s = '') => normalize(s).replace(/[^a-z0-9]/g, '');
 
@@ -892,14 +924,8 @@ async function boot() {
     topPlaces: (name) => topPlaces(name, 3),
     // Súper cercanos que todavía no cargaste (para descubrir dónde comparar)
     nearbyStores: (exclude) => nearbyStores({ exclude, limit: 5 }),
-    // Precios EN VIVO de tiendas online (El Dorado, etc.)
-    onlinePrices: async (name) => {
-      try {
-        const r = await fetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
-        if (!r.ok) return [];
-        return (await r.json()).results || [];
-      } catch { return []; }
-    },
+    // Comparación unificada: tus precios + tiendas online, ordenada por precio
+    comparePrices: (name) => comparePrices(name),
     // Agregar un solo producto, opcionalmente con el lugar sugerido
     addOne: async (name, store) => {
       await addItem({
