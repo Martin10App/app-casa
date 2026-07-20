@@ -526,6 +526,20 @@ svg { width: 22px; height: 22px; }
 }
 .item-card__meta .avatar-mini { font-size: 13px; }
 .item-card__amount { color: var(--green); font-weight: 700; font-size: 13px; }
+.item-card__deal {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 12px; font-weight: 600;
+  color: var(--green);
+  background: var(--green-soft);
+  padding: 2px 8px; border-radius: 999px;
+}
+.item-card__deal b { font-weight: 800; }
+.super-card__deal {
+  margin-top: 5px;
+  font-size: 13px; font-weight: 700;
+  color: var(--green);
+}
 .item-card__due { color: var(--amber); font-weight: 600; font-size: 12px; }
 .item-card__due.is-late { color: var(--red); }
 

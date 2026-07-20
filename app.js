@@ -120,16 +120,25 @@ function tileHtml(item, cssClass) {
 const PRIO_COLOR = { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--red)' };
 const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 
+/** Dónde sale más barato un producto, según la libreta de precios. { store, price } o null */
+function cheapestFor(name) {
+  const prod = state.prices.find((p) => normalize(p.name) === normalize(name));
+  if (!prod || !prod.entries?.length) return null;
+  return prod.entries.reduce((m, e) => (m == null || e.price < m.price ? e : m), null);
+}
+
 function itemCardHtml(item, i) {
   const cat = CATEGORIES[item.category] || CATEGORIES.otros;
   const by = userOf(item.createdBy);
   const today = new Date().toISOString().slice(0, 10);
+  const deal = item.status === 'pendiente' ? cheapestFor(item.name) : null;
   return `
     <article class="item-card" data-id="${item.id}" style="--i:${i}; --prio-color:${PRIO_COLOR[item.priority] || 'transparent'}">
       ${tileHtml(item, 'item-card__tile')}
       <div class="item-card__body">
         <div class="item-card__name">${escapeHtml(item.name)}${item.qty > 1 ? `<span class="qty">×${item.qty}</span>` : ''}</div>
         ${item.detail ? `<div class="item-card__detail">${escapeHtml(item.detail)}</div>` : ''}
+        ${deal ? `<div class="item-card__deal">🏷️ Más barato en <b>${escapeHtml(deal.store)}</b> · ${fmtMoney(deal.price)}</div>` : ''}
         <div class="item-card__meta">
           <span class="prio-tag prio-tag--${item.priority}">${PRIO_LABEL[item.priority]}</span>
           <span>${cat.emoji} ${cat.label}</span>
@@ -339,6 +348,7 @@ function renderSuper() {
         <div class="super-card__body">
           <div class="super-card__name">${escapeHtml(item.name)}</div>
           ${item.detail ? `<div class="super-card__detail">${escapeHtml(item.detail)}</div>` : ''}
+          ${(() => { const d = cheapestFor(item.name); return d ? `<div class="super-card__deal">🏷️ Más barato en ${escapeHtml(d.store)} · ${fmtMoney(d.price)}</div>` : ''; })()}
           <span class="super-card__qty">×${item.qty || 1}</span>
         </div>
         <button class="super-check" data-action="super-complete" aria-label="Marcar ${escapeHtml(item.name)}">${ICONS.check}</button>
@@ -738,7 +748,13 @@ async function boot() {
       toast(`<b>${escapeHtml(item.name)}</b> actualizado`, { emoji: '✏️', type: 'success' });
     } else {
       await addItem({ ...item, createdBy: state.me });
-      toast(`<b>${escapeHtml(item.name)}</b> agregado`, { emoji: '✅', type: 'success' });
+      const deal = cheapestFor(item.name);
+      toast(
+        deal
+          ? `<b>${escapeHtml(item.name)}</b> agregado · 🏷️ más barato en ${escapeHtml(deal.store)} (${fmtMoney(deal.price)})`
+          : `<b>${escapeHtml(item.name)}</b> agregado`,
+        { emoji: '✅', type: 'success', duration: deal ? 5000 : 3800 }
+      );
       pushToOther(`${userOf(state.me).name} agregó: ${item.name}`, CATEGORIES[item.category]?.label || '');
       requestNotifPermission();
     }
@@ -853,12 +869,13 @@ async function boot() {
     const editEl = e.target.closest('[data-edit-card]');
     if (editEl) { e.stopPropagation(); pickCardPhoto(editEl.dataset.editCard); return; }
 
-    const cardEl = e.target.closest('.home-card');
+    // Incluye tanto las tarjetas normales (.home-card) como el banner destacado (.home-featured)
+    const cardEl = e.target.closest('[data-card]');
     if (!cardEl) return;
     const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
+    if (card?.special === 'purchases') { show('compras'); openBoleta(); return; }
     if (card?.special === 'prices') { show('prices'); return; }
     if (card?.special === 'inventory') { show('inventory'); return; }
-    if (card?.special === 'purchases') { show('compras'); return; }
     state.activeCard = cardEl.dataset.card;
     show('list');
   });
