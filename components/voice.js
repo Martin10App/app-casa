@@ -8,7 +8,7 @@
    en Android y iPhone; formato que Gemini entiende siempre).
    ============================================================ */
 
-import { $, $$, escapeHtml } from '../utils/helpers.js';
+import { $, $$, escapeHtml, fmtMoney } from '../utils/helpers.js';
 import { ICONS, CATEGORIES } from '../utils/images.js';
 import { toast } from './toast.js';
 
@@ -52,6 +52,17 @@ function build() {
         <p class="voice-hint">Entendiendo lo que dijiste…</p>
       </div>
 
+      <!-- Estado: consulta "¿dónde compro X?" (top precios) -->
+      <div class="voice-stage" id="voice-consulta" hidden>
+        <h2 class="voice-review__title" id="voice-consulta-title">¿Dónde comprar?</h2>
+        <p class="voice-transcript" id="voice-consulta-transcript"></p>
+        <div class="voice-items" id="voice-consulta-list"></div>
+        <p class="voice-sub" id="voice-consulta-hint"></p>
+        <div class="voice-actions">
+          <button class="btn btn--ghost" id="voice-consulta-retry">${ICONS.mic} De nuevo</button>
+        </div>
+      </div>
+
       <!-- Estado: revisión -->
       <div class="voice-stage" id="voice-review" hidden>
         <h2 class="voice-review__title">Esto entendí</h2>
@@ -79,10 +90,31 @@ function build() {
   $('#voice-retry', overlay).addEventListener('click', restart);
   $('#voice-error-retry', overlay).addEventListener('click', restart);
   $('#voice-add', overlay).addEventListener('click', addAll);
+  $('#voice-consulta-retry', overlay).addEventListener('click', restart);
+
+  // Elegir dónde comprar (o agregar igual) desde la consulta
+  $('#voice-consulta-list', overlay).addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-add]');
+    if (!btn) return;
+    const product = btn.dataset.add;
+    const store = btn.dataset.store || '';
+    btn.disabled = true;
+    try {
+      await deps.addOne(product, store);
+      toast(
+        store ? `<b>${escapeHtml(product)}</b> agregado · comprar en ${escapeHtml(store)} 🛒` : `<b>${escapeHtml(product)}</b> agregado`,
+        { emoji: '✅', type: 'success' }
+      );
+      close();
+    } catch (err) {
+      console.error(err);
+      toast('No se pudo agregar', { emoji: '⚠️' });
+    }
+  });
 }
 
 function showStage(id) {
-  ['voice-recording', 'voice-processing', 'voice-review', 'voice-error']
+  ['voice-recording', 'voice-processing', 'voice-consulta', 'voice-review', 'voice-error']
     .forEach((s) => { $('#' + s, overlay).hidden = (s !== id); });
 }
 
@@ -153,6 +185,13 @@ async function stopAndSend() {
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
+
+    // ¿Es una consulta "¿dónde compro X?" en vez de un pedido de anotar?
+    if (data.intent === 'consultar' && data.items?.length) {
+      renderConsulta(data.transcript, data.items[0].name);
+      return;
+    }
+
     reviewItems = data.items || [];
     if (!reviewItems.length) {
       showError(data.transcript ? `Escuché: "${data.transcript}" pero no encontré nada para anotar.` : 'No encontré nada para anotar. Probá de nuevo.');
@@ -163,6 +202,45 @@ async function stopAndSend() {
     console.error('[voz] envío:', err);
     showError('No me pude conectar con el asistente. Fijate que tengas internet y probá de nuevo.');
   }
+}
+
+/* ---------- Consulta: "¿dónde compro X?" → top precios ---------- */
+function fmtKmShort(km) {
+  if (km == null) return '';
+  return km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+}
+
+function renderConsulta(transcript, product) {
+  $('#voice-consulta-title', overlay).textContent = `¿Dónde comprar ${product}?`;
+  $('#voice-consulta-transcript', overlay).textContent = transcript ? `“${transcript}”` : '';
+  const places = deps.topPlaces(product);
+  const list = $('#voice-consulta-list', overlay);
+  const hint = $('#voice-consulta-hint', overlay);
+
+  if (!places.length) {
+    list.innerHTML = `
+      <div class="voice-consulta-empty">Todavía no tengo precios de <b>${escapeHtml(product)}</b>. Escaneá una boleta donde lo compres y la próxima vez te lo comparo.</div>
+      <button class="btn btn--primary voice-consulta-full" data-add="${escapeHtml(product)}">Agregar a la lista igual</button>`;
+    hint.textContent = '';
+  } else {
+    const medals = ['🥇', '🥈', '🥉'];
+    list.innerHTML = places.map((p, i) => {
+      const km = fmtKmShort(p.km);
+      return `
+        <button class="voice-item voice-consulta-place" data-store="${escapeHtml(p.store)}" data-add="${escapeHtml(product)}">
+          <span class="voice-consulta-medal">${medals[i] || '•'}</span>
+          <span class="voice-item__body">
+            <span class="voice-item__name">${escapeHtml(p.store)}</span>
+            ${km ? `<span class="voice-item__cat">📍 a ${km}</span>` : ''}
+          </span>
+          <span class="voice-consulta-price">${fmtMoney(p.price)}</span>
+        </button>`;
+    }).join('');
+    hint.textContent = deps.hasLocation()
+      ? 'Tocá dónde lo vas a comprar y lo agrego a la lista 👇'
+      : '💡 Activá la ubicación (en Precios) para ordenarlo también por cercanía.';
+  }
+  showStage('voice-consulta');
 }
 
 /* ---------- Revisión de lo entendido ---------- */

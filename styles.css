@@ -1164,6 +1164,14 @@ svg { width: 22px; height: 22px; }
 .voice-actions .btn { flex: 1; }
 .voice-error__emoji { font-size: 46px; }
 
+/* Consulta por voz: ranking de precios */
+.voice-consulta-place { cursor: pointer; }
+.voice-consulta-medal { font-size: 22px; flex: none; width: 30px; text-align: center; }
+.voice-consulta-price { font-weight: 800; font-size: 16px; color: var(--green); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.voice-consulta-place:first-child .voice-consulta-price { color: var(--green); }
+.voice-consulta-empty { font-size: 14px; color: var(--text-2); text-align: center; padding: var(--sp-3); line-height: 1.5; }
+.voice-consulta-full { width: 100%; margin-top: var(--sp-2); }
+
 /* ============================================================
    MODAL
    ============================================================ */

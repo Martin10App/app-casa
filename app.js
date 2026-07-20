@@ -126,14 +126,14 @@ const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 const RADIO_KM = 15;   // solo recomendamos súper dentro de este radio
 
 /**
- * Dónde conviene comprar un producto: el más barato de la libreta,
- * pero teniendo en cuenta la cercanía. Si el usuario compartió ubicación,
- * solo considera lugares dentro de RADIO_KM (o de ubicación desconocida,
- * porque son lugares donde igual comprás). Devuelve { store, price, km } o null.
+ * Ranking de dónde comprar un producto: más baratos primero, teniendo en
+ * cuenta la cercanía. Si hay ubicación, solo considera lugares dentro de
+ * RADIO_KM (o de ubicación desconocida, porque igual comprás ahí).
+ * Devuelve [{ store, price, km }, ...] ordenado por precio.
  */
-function cheapestFor(name) {
+function topPlaces(name, n = 3) {
   const prod = state.prices.find((p) => normalize(p.name) === normalize(name));
-  if (!prod || !prod.entries?.length) return null;
+  if (!prod || !prod.entries?.length) return [];
 
   const { userLoc, supers } = state;
   let candidatos = prod.entries.map((e) => {
@@ -145,13 +145,17 @@ function cheapestFor(name) {
     return { store: e.store, price: e.price, km };
   });
 
-  // Con ubicación: quedarse con los que están dentro del radio (o sin ubicación conocida)
   if (userLoc && supers) {
     const cerca = candidatos.filter((c) => c.km == null || c.km <= RADIO_KM);
     if (cerca.length) candidatos = cerca;
   }
 
-  return candidatos.reduce((m, c) => (m == null || c.price < m.price ? c : m), null);
+  return candidatos.sort((a, b) => a.price - b.price).slice(0, n);
+}
+
+/** El lugar más conveniente para un producto: { store, price, km } o null */
+function cheapestFor(name) {
+  return topPlaces(name, 1)[0] || null;
 }
 
 /** Texto listo para mostrar el "más barato": "Macromercado · $62 · a 2,8 km" */
@@ -832,6 +836,19 @@ async function boot() {
   // Anotar por voz 🎙️
   initVoice({
     getMe: () => state.me,
+    hasLocation: () => !!state.userLoc,
+    activarUbicacion,
+    // Ranking de dónde comprar algo (para la consulta por voz)
+    topPlaces: (name) => topPlaces(name, 3),
+    // Agregar un solo producto, opcionalmente con el lugar sugerido
+    addOne: async (name, store) => {
+      await addItem({
+        id: uid(), name, detail: store ? `Comprar en ${store}` : '', category: 'compras',
+        priority: 'media', qty: 1, amount: null, dueDate: null, photo: null,
+        status: 'pendiente', completedBy: null, completedAt: null, createdBy: state.me,
+      });
+      pushToOther(`${userOf(state.me).name} agregó: ${name}`, store ? `Comprar en ${store}` : '');
+    },
     addItems: async (items) => {
       for (const it of items) {
         await addItem({

@@ -52,9 +52,10 @@ En el audio, una persona dicta cosas para anotar en la app. Escuchá el audio y 
 Hoy es ${diaSemana} ${hoyISO}.
 
 Devolvé SOLO un JSON con esta forma exacta:
-{"transcript":"lo que se dijo, textual","items":[{"name":"...","category":"...","priority":"baja|media|alta","qty":1,"dueDate":"YYYY-MM-DD o null","amount":null}]}
+{"transcript":"lo que se dijo, textual","intent":"agregar","items":[{"name":"...","category":"...","priority":"baja|media|alta","qty":1,"dueDate":"YYYY-MM-DD o null","amount":null}]}
 
 Reglas:
+- "intent": normalmente "agregar". Poné "consultar" SOLO si la persona PREGUNTA dónde comprar algo o pide precios / el más barato / un top de precios (ej: "¿dónde compro X?", "dónde está más barato X", "tirame el top 3 de precios de X"). En "consultar", "items" lleva SOLO el/los productos por los que pregunta.
 - Un item por cada cosa mencionada. "azúcar y fideos" = DOS items.
 - "name": producto o tarea, corto, en minúscula salvo nombres propios (ej: "azúcar", "papel higiénico", "turno del dentista").
 - "category": elegí UNA sola de esta lista exacta: ${CATEGORIAS.join(', ')}.
@@ -107,7 +108,8 @@ No agregues nada fuera del JSON.`;
       }))
       .slice(0, 25);
 
-    return res.status(200).json({ transcript: (parsed.transcript || '').trim(), items });
+    const intent = parsed.intent === 'consultar' ? 'consultar' : 'agregar';
+    return res.status(200).json({ transcript: (parsed.transcript || '').trim(), intent, items });
   } catch (err) {
     console.error('[voz] error:', err);
     return res.status(500).json({ error: 'Error procesando el audio' });
