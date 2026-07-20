@@ -27,6 +27,7 @@ const DEFAULT_USERS = {
    y dirección del "cartero" que las manda. */
 const VAPID_KEY  = 'BMgNBXFXY6duoOgmOEVtc90f8c4SUwbMmxSCBgy_pHe279qHEXH09Ijwa4bVBYqRr-RUX9CAkOxnUQ2gygMKU60';
 const NOTIFY_API = 'https://app-casa-omega.vercel.app/api/notificar';
+const PRECIOS_API = 'https://app-casa-omega.vercel.app/api/precios-online';
 
 /* Correos de Google autorizados → a qué perfil corresponde cada uno.
    Solo estas cuentas pueden entrar (la base queda cerrada a ellas).
@@ -870,6 +871,14 @@ async function boot() {
     topPlaces: (name) => topPlaces(name, 3),
     // Súper cercanos que todavía no cargaste (para descubrir dónde comparar)
     nearbyStores: (exclude) => nearbyStores({ exclude, limit: 5 }),
+    // Precios EN VIVO de tiendas online (El Dorado, etc.)
+    onlinePrices: async (name) => {
+      try {
+        const r = await fetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
+        if (!r.ok) return [];
+        return (await r.json()).results || [];
+      } catch { return []; }
+    },
     // Agregar un solo producto, opcionalmente con el lugar sugerido
     addOne: async (name, store) => {
       await addItem({
