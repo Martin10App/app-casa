@@ -670,6 +670,55 @@ svg { width: 22px; height: 22px; }
 /* ============================================================
    BOLETAS / COMPRAS
    ============================================================ */
+.expense-summary {
+  padding: var(--sp-4); margin-bottom: var(--sp-3);
+  border-radius: var(--r-l); color: #fff;
+  background: linear-gradient(145deg, #2456ce, #3276ff 58%, #4c91ff);
+  box-shadow: 0 14px 34px rgba(47, 107, 255, .25);
+}
+.expense-cycle-nav { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; text-align: center; }
+.expense-cycle-nav .icon-btn { color: #fff; }
+.expense-cycle-nav .icon-btn:hover { background: rgba(255,255,255,.12); }
+.expense-cycle-nav .icon-btn:disabled { opacity: .3; cursor: default; }
+.expense-cycle-nav small, .expense-cycle-nav strong { display: block; }
+.expense-cycle-nav small { font-size: 11px; opacity: .72; }
+.expense-cycle-nav strong { font-size: 14px; text-transform: capitalize; }
+.expense-next svg { transform: rotate(180deg); }
+.expense-total { padding: var(--sp-4) 0; text-align: center; }
+.expense-total span, .expense-total small { display: block; font-size: 12px; opacity: .78; }
+.expense-total strong { display: block; font: 700 36px/1.2 var(--font-display); font-variant-numeric: tabular-nums; }
+.expense-payment-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.expense-payment-card { padding: var(--sp-3); border-radius: var(--r-s); background: rgba(255,255,255,.12); }
+.expense-payment-card span, .expense-payment-card b, .expense-payment-card small { display: block; }
+.expense-payment-card span { font-size: 11px; opacity: .75; }
+.expense-payment-card b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.expense-payment-card small { font-size: 10px; opacity: .65; }
+.expense-payment-card--master { background: rgba(255,255,255,.2); }
+
+.expense-analysis { margin-bottom: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-m); background: var(--surface); overflow: hidden; }
+.expense-analysis > summary { min-height: 48px; display: flex; align-items: center; padding: 0 var(--sp-4); cursor: pointer; color: var(--primary); font-weight: 700; }
+.expense-analysis__body { padding: 0 var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-5); }
+.expense-breakdown h4 { margin: 0 0 var(--sp-3); font-size: 14px; }
+.expense-bar-row { margin-bottom: var(--sp-3); }
+.expense-bar-row__labels { display: flex; justify-content: space-between; gap: var(--sp-2); font-size: 13px; }
+.expense-bar-row__labels b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.expense-bar { height: 7px; margin-top: 5px; overflow: hidden; border-radius: 999px; background: var(--surface-2); }
+.expense-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--green)); }
+.expense-bar-row small { display: block; margin-top: 3px; color: var(--text-3); font-size: 10px; }
+.expense-empty { color: var(--text-3); font-size: 13px; }
+.expense-products { display: grid; gap: 9px; }
+.expense-products div { display: flex; justify-content: space-between; gap: var(--sp-3); padding-bottom: 8px; border-bottom: 1px dashed var(--border); font-size: 13px; }
+.expense-products b { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.expense-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); margin-bottom: var(--sp-5); }
+.expense-action { min-height: 84px; padding: 12px 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--surface); box-shadow: var(--shadow-s); }
+.expense-action > span:first-child { display: grid; place-items: center; width: 32px; height: 32px; color: var(--primary); }
+.expense-action > span:last-child, .expense-action b, .expense-action small { display: block; }
+.expense-action b { font-size: 12px; }
+.expense-action small { color: var(--text-3); font-size: 9px; }
+.expense-action--primary { border-color: color-mix(in srgb, var(--primary) 36%, var(--border)); background: var(--primary-soft); }
+.expense-action:active { transform: scale(.97); }
+.expense-section-title { margin: 0 0 var(--sp-3); font: 600 18px var(--font-display); }
 .boleta-cta {
   display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
   width: 100%; min-height: 54px;
@@ -696,7 +745,10 @@ svg { width: 22px; height: 22px; }
 .compra-card__head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); }
 .compra-card__info { flex: 1; min-width: 0; }
 .compra-card__store { font-weight: 700; font-size: 15.5px; }
+.compra-card__store svg { width: 16px; height: 16px; vertical-align: -3px; color: var(--primary); }
 .compra-card__meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.compra-card__tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.compra-card__tags span { padding: 2px 7px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 10px; font-weight: 600; }
 .compra-card__total { font-family: var(--font-display); font-size: 19px; font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
 .compra-card__detalle { border-top: 1px solid var(--border); }
 .compra-card__detalle summary {
@@ -717,6 +769,7 @@ svg { width: 22px; height: 22px; }
 /* Hoja de escaneo */
 .boleta-sheet { max-width: 520px; }
 .boleta-emoji { font-size: 56px; }
+.boleta-pick-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
 .boleta-review { justify-content: flex-start !important; width: 100%; }
 .boleta-head { display: flex; gap: var(--sp-2); width: 100%; margin-bottom: var(--sp-3); }
 .boleta-field { display: flex; flex-direction: column; gap: 4px; flex: 1; text-align: left; }
@@ -749,6 +802,16 @@ svg { width: 22px; height: 22px; }
 .boleta-item__del:hover { background: var(--red-soft); color: var(--red); }
 .boleta-item__del svg { width: 13px; height: 13px; }
 .boleta-aviso { font-size: 12px; color: var(--text-2); margin: var(--sp-3) 0; text-align: left; }
+.expense-optional { margin: 0; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-s); }
+.expense-optional legend { padding: 0 6px; color: var(--text-2); font-size: 12px; font-weight: 600; }
+
+@media (max-width: 390px) {
+  .expense-total strong { font-size: 31px; }
+  .expense-action { min-height: 78px; padding-inline: 4px; }
+  .expense-action b { font-size: 11px; }
+  .boleta-head, .expense-field-row { flex-direction: column; align-items: stretch; }
+  .boleta-field--sm { max-width: none; }
+}
 
 /* ============================================================
    INVENTARIO

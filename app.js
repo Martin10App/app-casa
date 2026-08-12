@@ -13,6 +13,8 @@ import { initPrices, renderPrices, openPriceModal } from './components/prices.js
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
 import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
+import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycle } from './components/expenses.js';
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle } from './utils/expenses.mjs';
 import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
@@ -291,18 +293,18 @@ function emptyStateHtml(emoji, title, sub) {
     </div>`;
 }
 
-/* Banner destacado de "Escanear boleta" — la función estrella, arriba de todo */
+/* Banner destacado del centro de gastos */
 function featuredBoletaHtml() {
   const nComp = state.compras.length;
   return `
-    <button class="home-featured" data-card="compras-boletas" aria-label="Escanear boleta">
+    <button class="home-featured" data-card="compras-boletas" aria-label="Abrir gastos">
       <img class="home-featured__img" src="https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80"
            alt="" loading="lazy" onload="this.classList.add('is-loaded')" onerror="this.remove()">
-      <span class="home-featured__badge">✨ Escaneo mágico</span>
+      <span class="home-featured__badge">✨ Control mensual</span>
       <span class="home-featured__body">
-        <span class="home-featured__title">📸 Escaneá tu boleta</span>
-        <span class="home-featured__sub">Sacá una foto del ticket y cargamos solos el inventario, los precios y el gasto.</span>
-        <span class="home-featured__cta">${ICONS.camera} ${nComp ? `${nComp} compra${nComp === 1 ? '' : 's'} · escanear otra` : 'Escanear ahora'}</span>
+        <span class="home-featured__title">💳 Tus gastos, claros</span>
+        <span class="home-featured__sub">Boletas, gastos manuales y el ciclo de tu tarjeta del 24 al 23.</span>
+        <span class="home-featured__cta">${ICONS.receipt} ${nComp ? `${nComp} movimiento${nComp === 1 ? '' : 's'} · ver análisis` : 'Abrir gastos'}</span>
       </span>
     </button>`;
 }
@@ -425,7 +427,9 @@ function renderHistory() {
 
 /* ================= Render: Boletas / compras ================= */
 function renderCompras() {
-  const list = state.compras;
+  renderExpenseDashboard();
+  const cycle = getExpenseCycle();
+  const list = state.compras.filter((purchase) => isInCycle(purchase.date, cycle));
   const gastado = list.reduce((a, c) => a + (c.total || 0), 0);
   $('#compras-count').textContent = list.length
     ? `${list.length} compra${list.length === 1 ? '' : 's'} · ${fmtMoney(gastado)}`
@@ -439,8 +443,9 @@ function renderCompras() {
           <article class="compra-card" data-id="${c.id}" style="--i:${i}">
             <header class="compra-card__head">
               <div class="compra-card__info">
-                <div class="compra-card__store">🏪 ${escapeHtml(c.store || 'Sin lugar')}</div>
-                <div class="compra-card__meta">${fmtDate(c.date + 'T12:00')} · ${items.length} producto${items.length === 1 ? '' : 's'} · ${by.emoji} ${escapeHtml(by.name)}</div>
+                <div class="compra-card__store">${c.source === 'manual' ? ICONS.edit : ICONS.receipt} ${escapeHtml(c.store || 'Sin lugar')}</div>
+                <div class="compra-card__meta">${fmtDate(c.date + 'T12:00')} · ${items.length} concepto${items.length === 1 ? '' : 's'} · ${by.emoji} ${escapeHtml(by.name)}</div>
+                <div class="compra-card__tags"><span>${escapeHtml(PAYMENT_METHODS[c.paymentMethod]?.short || 'Sin especificar')}</span><span>${escapeHtml(EXPENSE_CATEGORIES[c.expenseCategory] || 'Otros')}</span></div>
               </div>
               <div class="compra-card__total">${fmtMoney(c.total || 0)}</div>
             </header>
@@ -449,7 +454,7 @@ function renderCompras() {
               <div class="compra-card__items">
                 ${items.map((it) => `
                   <div class="compra-line">
-                    <span>${(CATEGORIES[it.category] || CATEGORIES.otros).emoji} ${escapeHtml(it.name)}${it.qty > 1 ? ` ×${it.qty}` : ''}</span>
+                    <span>${(CATEGORIES[it.category] || CATEGORIES.otros).emoji} ${escapeHtml(it.name)}${(it.purchaseQuantity || it.qty) > 1 ? ` · ${it.purchaseQuantity || it.qty} ${escapeHtml(it.purchaseUnit || 'un.')}` : ''}</span>
                     <span class="compra-line__price">${fmtMoney(it.lineTotal || it.unitPrice || 0)}</span>
                   </div>`).join('')}
               </div>
@@ -459,8 +464,8 @@ function renderCompras() {
       }).join('')
     : `<div class="empty-state">
          <span class="empty-state__emoji">🧾</span>
-         <div class="empty-state__title">Todavía no escaneaste ninguna boleta</div>
-         <div class="empty-state__sub">Sacale foto al ticket del súper y cargamos solos el inventario, los precios y el gasto.</div>
+         <div class="empty-state__title">Todavía no hay gastos en este período</div>
+         <div class="empty-state__sub">Sacá una foto, elegí una boleta de la galería o anotá un gasto sin comprobante.</div>
        </div>`;
 }
 
@@ -973,6 +978,13 @@ async function boot() {
     isDark,
   });
 
+  initExpenses({
+    getMe: () => state.me,
+    getPurchases: () => state.compras,
+    saveReceiptBundle,
+    render: renderCompras,
+  });
+
   // Libreta de precios
   initPrices({
     getPrices: () => state.prices,
@@ -999,7 +1011,9 @@ async function boot() {
   $('#prices-back').addEventListener('click', () => show('home'));
   $('#inv-back').addEventListener('click', () => show('home'));
   $('#compras-back').addEventListener('click', () => show('home'));
-  $('#btn-escanear').addEventListener('click', openBoleta);
+  $('#btn-camara-boleta').addEventListener('click', () => openBoleta('camera'));
+  $('#btn-galeria-boleta').addEventListener('click', () => openBoleta('gallery'));
+  $('#btn-gasto-manual').addEventListener('click', openManualExpense);
 
   // Borrar una compra desde su desglose
   $('#compras-list').addEventListener('click', async (e) => {
@@ -1031,7 +1045,7 @@ async function boot() {
     const cardEl = e.target.closest('[data-card]');
     if (!cardEl) return;
     const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
-    if (card?.special === 'purchases') { show('compras'); openBoleta(); return; }
+    if (card?.special === 'purchases') { show('compras'); return; }
     if (card?.special === 'prices') { show('prices'); return; }
     if (card?.special === 'inventory') { show('inventory'); return; }
     state.activeCard = cardEl.dataset.card;

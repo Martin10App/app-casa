@@ -11,7 +11,7 @@ function walk(dir) {
     if (entry.name === '.git' || entry.name === 'tests') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walk(full);
-    else if (entry.name.endsWith('.js')) files.push(full);
+    else if (entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) files.push(full);
   }
 }
 walk(root);

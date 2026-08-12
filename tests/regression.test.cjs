@@ -14,10 +14,10 @@ test('Uruguay keeps the local calendar date after UTC midnight', () => {
 
 test('package prices are normalized per kilogram and litre', () => {
   assert.deepEqual(presentation('arroz 500 g', 60), {
-    sizeLabel: '500 g', comparisonUnit: 'kg', comparisonPrice: 120,
+    sizeLabel: '500 g', comparisonUnit: 'kg', comparisonPrice: 120, packageQuantity: 0.5,
   });
   assert.deepEqual(presentation('leche 1,5 L', 90), {
-    sizeLabel: '1,5 l', comparisonUnit: 'l', comparisonPrice: 60,
+    sizeLabel: '1,5 l', comparisonUnit: 'l', comparisonPrice: 60, packageQuantity: 1.5,
   });
 });
 
@@ -53,5 +53,32 @@ test('voice review only inspects rows that own a checkbox', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'components', 'voice.js'), 'utf8');
   assert.match(source, /#voice-items \.voice-item/);
   assert.match(source, /checkbox\?\.checked/);
+});
+
+test('camera and gallery are separate receipt inputs', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'components', 'boleta.js'), 'utf8');
+  assert.match(source, /source === 'camera'/);
+  assert.match(source, /setAttribute\('capture', 'environment'\)/);
+  assert.match(source, /pickPhoto\('gallery'\)/);
+});
+
+test('card cycles run from day 24 through day 23 and reports stay separated', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  assert.deepEqual(expenses.billingCycleFor('2026-08-12'), { start: '2026-07-24', end: '2026-08-23' });
+  assert.deepEqual(expenses.billingCycleFor('2026-08-24'), { start: '2026-08-24', end: '2026-09-23' });
+  assert.deepEqual(expenses.shiftBillingCycle({ start: '2026-12-24', end: '2027-01-23' }, 1), { start: '2027-01-24', end: '2027-02-23' });
+
+  const report = expenses.analyzeExpenses([
+    { date: '2026-07-23', store: 'Viejo', total: 999, paymentMethod: 'cash' },
+    { date: '2026-07-24', store: 'Macromercado', total: 1200, paymentMethod: 'master_brou', expenseCategory: 'supermercado', items: [{ name: 'Pollo', purchaseQuantity: 2, purchaseUnit: 'kg', lineTotal: 500 }] },
+    { date: '2026-08-02', store: 'Ancap', total: 500, paymentMethod: 'debit', expenseCategory: 'combustible' },
+    { date: '2026-08-23', store: 'MACROMERCADO', total: 300, paymentMethod: 'master_brou', expenseCategory: 'supermercado', items: [{ name: 'pollo', purchaseQuantity: 1, purchaseUnit: 'kg', lineTotal: 300 }] },
+    { date: '2026-08-24', store: 'Nuevo', total: 777, paymentMethod: 'cash' },
+  ], { start: '2026-07-24', end: '2026-08-23' });
+  assert.equal(report.total, 2000);
+  assert.deepEqual(report.merchants.map((row) => [row.key, row.total]), [['Macromercado', 1500], ['Ancap', 500]]);
+  assert.deepEqual(report.payments.map((row) => [row.key, row.total]), [['master_brou', 1500], ['debit', 500]]);
+  assert.equal(report.products[0].quantity, 3);
+  assert.equal(report.products[0].unit, 'kg');
 });
 

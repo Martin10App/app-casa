@@ -16,6 +16,7 @@ import { ICONS, CATEGORIES, productVisual, productGradient, productGradientDark 
 import { toast } from './toast.js';
 import { localISODate } from '../utils/date.js';
 import { apiFetch } from '../utils/api.js';
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES } from '../utils/expenses.mjs';
 
 const BOLETA_API = 'https://app-casa-omega.vercel.app/api/boleta';
 
@@ -40,7 +41,10 @@ function build() {
         <span class="boleta-emoji">🧾</span>
         <p class="voice-hint">Sacale una foto a la boleta</p>
         <p class="voice-sub">Que se vean los productos y el total. Después revisás lo que entendió antes de guardar.</p>
-        <button class="btn btn--primary" id="bol-pick">${ICONS.camera} Sacar / elegir foto</button>
+        <div class="boleta-pick-actions">
+          <button class="btn btn--primary" id="bol-camera">${ICONS.camera} Sacar foto</button>
+          <button class="btn btn--ghost" id="bol-gallery">${ICONS.image} Elegir de galería</button>
+        </div>
       </div>
 
       <!-- Procesando -->
@@ -67,6 +71,20 @@ function build() {
             <input id="bol-total" class="field__input" type="number" step="any" min="0">
           </label>
         </div>
+        <div class="boleta-head">
+          <label class="boleta-field">
+            <span>Forma de pago</span>
+            <select id="bol-payment" class="field__input">
+              ${Object.entries(PAYMENT_METHODS).filter(([key]) => key !== 'unknown').map(([key, value]) => `<option value="${key}">${value.label}</option>`).join('')}
+            </select>
+          </label>
+          <label class="boleta-field">
+            <span>Categoría del gasto</span>
+            <select id="bol-expense-category" class="field__input">
+              ${Object.entries(EXPENSE_CATEGORIES).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}
+            </select>
+          </label>
+        </div>
         <div class="boleta-items" id="bol-items"></div>
         <p class="boleta-aviso" id="bol-aviso"></p>
         <div class="voice-actions">
@@ -79,16 +97,21 @@ function build() {
       <div class="voice-stage" id="bol-error" hidden>
         <span class="voice-error__emoji">😕</span>
         <p class="voice-hint" id="bol-error-msg">No pude leer la boleta.</p>
-        <button class="btn btn--primary" id="bol-error-retry">${ICONS.camera} Probar otra foto</button>
+        <div class="boleta-pick-actions">
+          <button class="btn btn--primary" id="bol-error-camera">${ICONS.camera} Sacar otra</button>
+          <button class="btn btn--ghost" id="bol-error-gallery">${ICONS.image} Elegir otra</button>
+        </div>
       </div>
     </div>`;
   document.body.appendChild(overlay);
 
   $('.voice-close', overlay).addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  $('#bol-pick', overlay).addEventListener('click', pickPhoto);
-  $('#bol-retry', overlay).addEventListener('click', pickPhoto);
-  $('#bol-error-retry', overlay).addEventListener('click', pickPhoto);
+  $('#bol-camera', overlay).addEventListener('click', () => pickPhoto('camera'));
+  $('#bol-gallery', overlay).addEventListener('click', () => pickPhoto('gallery'));
+  $('#bol-retry', overlay).addEventListener('click', () => stage('bol-start'));
+  $('#bol-error-camera', overlay).addEventListener('click', () => pickPhoto('camera'));
+  $('#bol-error-gallery', overlay).addEventListener('click', () => pickPhoto('gallery'));
   $('#bol-save', overlay).addEventListener('click', guardar);
 
   // Borrar un renglón de la revisión
@@ -108,11 +131,11 @@ function stage(id) {
 /* ============================================================
    Foto → IA
    ============================================================ */
-function pickPhoto() {
+function pickPhoto(source = 'gallery') {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-  // Sin 'capture': así el celu te deja elegir entre sacar foto o buscar en la galería
+  if (source === 'camera') input.setAttribute('capture', 'environment');
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
@@ -149,6 +172,8 @@ function renderReview() {
   $('#bol-store', overlay).value = lectura.store || '';
   $('#bol-date', overlay).value = lectura.date || localISODate();
   $('#bol-total', overlay).value = lectura.total || '';
+  $('#bol-payment', overlay).value = lectura.paymentMethod || 'master_brou';
+  $('#bol-expense-category', overlay).value = lectura.expenseCategory || 'supermercado';
 
   $('#bol-items', overlay).innerHTML = lectura.items.map((it, i) => {
     const cat = CATEGORIES[it.category] || CATEGORIES.otros;
@@ -194,6 +219,8 @@ async function guardar() {
   const store = $('#bol-store', overlay).value.trim();
   const date = $('#bol-date', overlay).value || localISODate();
   const total = parseFloat($('#bol-total', overlay).value) || 0;
+  const paymentMethod = $('#bol-payment', overlay).value;
+  const expenseCategory = $('#bol-expense-category', overlay).value;
   if (!store) { toast('¿En qué lugar compraste?', { emoji: '🏪' }); $('#bol-store', overlay).focus(); return; }
   if (!lectura.items.length) { toast('No quedó ningún producto', { emoji: '🤷' }); return; }
 
@@ -246,7 +273,7 @@ async function guardar() {
     } : null;
 
     const result = await deps.saveReceiptBundle({
-      purchase: { id: receiptId, store, date, total, items: lectura.items, createdBy: me },
+      purchase: { id: receiptId, source: 'receipt', store, date, total, items: lectura.items, paymentMethod, expenseCategory, createdBy: me },
       inventory, prices, expense,
     });
     if (result?.duplicate) {
@@ -279,11 +306,12 @@ export function initBoleta(dependencies) {
   if (!overlay) build();
 }
 
-export function openBoleta() {
+export function openBoleta(source = null) {
   lectura = null;
   overlay.classList.add('is-open');
   document.body.classList.add('no-scroll');
   stage('bol-start');
+  if (source === 'camera' || source === 'gallery') pickPhoto(source);
 }
 
 function close() {

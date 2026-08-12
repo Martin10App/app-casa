@@ -73,16 +73,26 @@
       <div class="items-list" id="items-list"></div>
     </section>
 
-    <!-- Compras / boletas escaneadas -->
+    <!-- Gastos: boletas, carga manual y análisis por cierre de tarjeta -->
     <section class="view" id="view-compras">
       <header class="view-head safe-top">
         <button class="icon-btn" data-nav="home" id="compras-back" aria-label="Volver"></button>
-        <h2 class="view-head__title">Boletas</h2>
+        <h2 class="view-head__title">Gastos</h2>
         <span class="view-head__count" id="compras-count"></span>
       </header>
-      <button class="boleta-cta" id="btn-escanear">
-        <span data-icon="camera"></span> Escanear una boleta
-      </button>
+      <div id="expense-dashboard"></div>
+      <section class="expense-actions" aria-label="Cargar un gasto">
+        <button class="expense-action expense-action--primary" id="btn-camara-boleta">
+          <span data-icon="camera"></span><span><b>Sacar foto</b><small>Abrir la cámara</small></span>
+        </button>
+        <button class="expense-action" id="btn-galeria-boleta">
+          <span data-icon="image"></span><span><b>Elegir foto</b><small>Desde la galería</small></span>
+        </button>
+        <button class="expense-action" id="btn-gasto-manual">
+          <span data-icon="edit"></span><span><b>Anotar gasto</b><small>Sin boleta</small></span>
+        </button>
+      </section>
+      <h3 class="expense-section-title">Movimientos del período</h3>
       <div class="items-list" id="compras-list"></div>
     </section>
 

@@ -24,6 +24,7 @@ function presentation(text, packagePrice) {
     sizeLabel,
     comparisonUnit,
     comparisonPrice: baseAmount > 0 && price > 0 ? +(price / baseAmount).toFixed(2) : null,
+    packageQuantity: baseAmount,
   };
 }
 

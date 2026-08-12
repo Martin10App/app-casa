@@ -114,6 +114,8 @@ No agregues nada fuera del JSON.`;
           lineTotal: lineTotal || +(unitPrice * qty).toFixed(2),
           category: CATEGORIAS.includes(it.category) ? it.category : 'despensa',
           ...pack,
+          purchaseQuantity: pack.packageQuantity ? +(pack.packageQuantity * qty).toFixed(3) : qty,
+          purchaseUnit: pack.comparisonUnit || 'unidad',
         };
       })
       .slice(0, 80);
