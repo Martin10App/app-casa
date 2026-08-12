@@ -102,3 +102,31 @@ test('historical expenses without payment metadata belong to Master BROU', async
   assert.equal(expenses.paymentMethodFor({}), 'master_brou');
 });
 
+test('quick supermarket entry infers aisles and groups a useful route', async () => {
+  const shopping = await import('../utils/shopping.mjs');
+  assert.equal(shopping.inferShoppingCategory('2 kilos de pollo'), 'carnes');
+  assert.equal(shopping.inferShoppingCategory('Papel higiénico'), 'limpieza');
+  assert.equal(shopping.inferShoppingCategory('una cosa rara'), 'compras');
+  const groups = shopping.groupShoppingItems([
+    { id: '1', name: 'Arroz', category: 'compras', priority: 'media' },
+    { id: '2', name: 'Tomate', category: 'compras', priority: 'alta' },
+    { id: '3', name: 'Pollo', category: 'carnes', priority: 'baja' },
+  ]);
+  assert.deepEqual(groups.map((group) => [group.id, group.items.map((item) => item.id)]), [
+    ['frutas-verduras', ['2']], ['carniceria', ['3']], ['despensa', ['1']],
+  ]);
+});
+
+test('supermarket insights estimate prices and recommend the best-covered store', async () => {
+  const { shoppingInsights } = await import('../utils/shopping.mjs');
+  const insight = shoppingInsights([
+    { id: 'a', qty: 2, priority: 'alta' }, { id: 'b', qty: 1, priority: 'media' }, { id: 'c', qty: 1, priority: 'alta' },
+  ], {
+    a: { store: 'Macromercado', price: 100 }, b: { store: 'Macromercado', price: 50 }, c: { store: 'Ta-Ta', price: 80 },
+  });
+  assert.equal(insight.estimatedTotal, 330);
+  assert.equal(insight.pricedCount, 3);
+  assert.equal(insight.urgentCount, 2);
+  assert.deepEqual(insight.bestStore, { store: 'Macromercado', count: 2 });
+});
+

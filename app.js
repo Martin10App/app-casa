@@ -15,6 +15,7 @@ import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
 import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycle } from './components/expenses.js';
 import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
+import { initSupermarket, renderSupermarket } from './components/supermarket.js';
 import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
@@ -471,24 +472,7 @@ function renderCompras() {
 
 /* ================= Render: Modo Supermercado ================= */
 function renderSuper() {
-  const items = pending().sort((a, b) => {
-    const order = { alta: 0, media: 1, baja: 2 };
-    return order[a.priority] - order[b.priority];
-  });
-  $('#super-sub').textContent = `${items.length} pendiente${items.length === 1 ? '' : 's'}`;
-  $('#super-list').innerHTML = items.length
-    ? items.map((item, i) => `
-      <article class="super-card" data-id="${item.id}" style="--i:${i}">
-        ${tileHtml(item, 'super-card__tile')}
-        <div class="super-card__body">
-          <div class="super-card__name">${escapeHtml(item.name)}</div>
-          ${item.detail ? `<div class="super-card__detail">${escapeHtml(item.detail)}</div>` : ''}
-          ${(() => { const d = cheapestFor(item.name); return d ? `<div class="super-card__deal">🏷️ Más barato en ${dealText(d)}</div>` : ''; })()}
-          <span class="super-card__qty">×${item.qty || 1}</span>
-        </div>
-        <button class="super-check" data-action="super-complete" aria-label="Marcar ${escapeHtml(item.name)}">${ICONS.check}</button>
-      </article>`).join('')
-    : emptyStateHtml('🎉', '¡Changuito completo!', 'No queda nada pendiente para comprar.');
+  renderSupermarket();
 }
 
 /* ================= Navegación ================= */
@@ -983,6 +967,19 @@ async function boot() {
     getPurchases: () => state.compras,
     saveReceiptBundle,
     render: renderCompras,
+  });
+
+  initSupermarket({
+    getPending: pending,
+    getMe: () => state.me,
+    cheapestFor,
+    dealText,
+    userOf,
+    avatarHtml,
+    tileHtml,
+    updateItem,
+    addItem,
+    notifyOther: (name, category) => pushToOther(`${userOf(state.me).name} agregó: ${name}`, CATEGORIES[category]?.label || 'Compras'),
   });
 
   // Libreta de precios

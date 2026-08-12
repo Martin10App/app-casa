@@ -162,7 +162,19 @@
         <p class="super__sub" id="super-sub">0 pendientes</p>
       </div>
     </header>
-    <div class="super__list" id="super-list"></div>
+    <div class="super__content">
+      <section class="super-smart" id="super-smart" aria-label="Resumen inteligente de la compra"></section>
+      <form class="super-quick" id="super-quick-form">
+        <label for="super-quick-input">Agregar rápido</label>
+        <div class="super-quick__row">
+          <span class="super-quick__icon" data-icon="plus"></span>
+          <input id="super-quick-input" type="text" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="Ej. leche, pollo, detergente…">
+          <button class="btn btn--primary" id="super-quick-add" type="submit">Agregar</button>
+        </div>
+        <small>Si ya está en la lista, aumenta la cantidad.</small>
+      </form>
+      <div class="super__list" id="super-list"></div>
+    </div>
   </section>
 
   <!-- ================= BOTÓN DE VOZ (flotante) ================= -->

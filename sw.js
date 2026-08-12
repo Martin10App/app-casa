@@ -7,7 +7,7 @@
      (Firestore ya tiene su propia caché offline).
    ============================================================ */
 
-const CACHE = 'nuestro-hogar-v19';
+const CACHE = 'nuestro-hogar-v20';
 
 const SHELL = [
   './',
@@ -23,12 +23,14 @@ const SHELL = [
   './components/voice.js',
   './components/boleta.js',
   './components/expenses.js',
+  './components/supermarket.js',
   './utils/helpers.js',
   './utils/images.js',
   './utils/notify.js',
   './utils/date.js',
   './utils/api.js',
   './utils/expenses.mjs',
+  './utils/shopping.mjs',
   './utils/supers.js',
   './assets/supermercados.json',
   './icons/icon-192.png',
