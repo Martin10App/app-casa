@@ -91,3 +91,14 @@ test('ANCAP and its Bregu SRL receipt name are one merchant', async () => {
   assert.deepEqual(report.merchants, [{ key: 'ANCAP', total: 2000 }]);
 });
 
+test('historical expenses without payment metadata belong to Master BROU', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  const report = expenses.analyzeExpenses([
+    { date: '2026-08-01', store: 'Macromercado', total: 1500 },
+    { date: '2026-08-10', store: 'ANCAP', total: 1000, paymentMethod: 'master_brou' },
+    { date: '2026-08-12', store: 'Leñería', total: 500, paymentMethod: 'debit' },
+  ], { start: '2026-07-24', end: '2026-08-23' });
+  assert.deepEqual(report.payments.map((row) => [row.key, row.total]), [['master_brou', 2500], ['debit', 500]]);
+  assert.equal(expenses.paymentMethodFor({}), 'master_brou');
+});
+

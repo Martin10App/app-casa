@@ -14,7 +14,7 @@ import { initInventory, renderInventory, openInventoryModal } from './components
 import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
 import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycle } from './components/expenses.js';
-import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle } from './utils/expenses.mjs';
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
 import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
@@ -445,7 +445,7 @@ function renderCompras() {
               <div class="compra-card__info">
                 <div class="compra-card__store">${c.source === 'manual' ? ICONS.edit : ICONS.receipt} ${escapeHtml(c.store || 'Sin lugar')}</div>
                 <div class="compra-card__meta">${fmtDate(c.date + 'T12:00')} · ${items.length} concepto${items.length === 1 ? '' : 's'} · ${by.emoji} ${escapeHtml(by.name)}</div>
-                <div class="compra-card__tags"><span>${escapeHtml(PAYMENT_METHODS[c.paymentMethod]?.short || 'Sin especificar')}</span><span>${escapeHtml(EXPENSE_CATEGORIES[c.expenseCategory] || 'Otros')}</span></div>
+                <div class="compra-card__tags"><span>${escapeHtml(PAYMENT_METHODS[paymentMethodFor(c)].short)}</span><span>${escapeHtml(EXPENSE_CATEGORIES[c.expenseCategory] || 'Otros')}</span></div>
               </div>
               <div class="compra-card__total">${fmtMoney(c.total || 0)}</div>
             </header>

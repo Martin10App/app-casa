@@ -20,6 +20,12 @@ export const EXPENSE_CATEGORIES = {
   otros: 'Otros',
 };
 
+// Martín confirmó que todas las compras históricas, anteriores al selector
+// de forma de pago, fueron hechas con la Master BROU Recompensa.
+export function paymentMethodFor(purchase) {
+  return purchase.paymentMethod || 'master_brou';
+}
+
 const pad = (value) => String(value).padStart(2, '0');
 const iso = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
@@ -90,7 +96,7 @@ export function analyzeExpenses(purchases, cycle) {
     total += amount;
     addMerchant(merchants, purchase.store, amount);
     addTo(categories, purchase.expenseCategory || 'otros', amount);
-    addTo(payments, purchase.paymentMethod || 'unknown', amount);
+    addTo(payments, paymentMethodFor(purchase), amount);
 
     for (const item of purchase.items || []) {
       const name = item.name?.trim();
