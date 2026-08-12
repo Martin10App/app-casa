@@ -19,6 +19,8 @@ test('package prices are normalized per kilogram and litre', () => {
   assert.deepEqual(presentation('leche 1,5 L', 90), {
     sizeLabel: '1,5 l', comparisonUnit: 'l', comparisonPrice: 60, packageQuantity: 1.5,
   });
+  assert.equal(presentation('Arroz oficial · 1.0 Kilogramos', 30).comparisonPrice, 30);
+  assert.equal(presentation('Aceite oficial · 900.0 Mililitros', 90).comparisonPrice, 100);
 });
 
 test('API authorization accepts only verified household accounts', () => {
@@ -128,5 +130,39 @@ test('supermarket insights estimate prices and recommend the best-covered store'
   assert.equal(insight.pricedCount, 3);
   assert.equal(insight.urgentCount, 2);
   assert.deepEqual(insight.bestStore, { store: 'Macromercado', count: 2 });
+});
+
+test('live price matching rejects unrelated products and prefers exact grocery names', () => {
+  const { relevance, bestOfficialArticles, officialStoreName, parseOfficialBasket } = require('../api/precios-online')._test;
+  assert.ok(relevance('Leche entera Conaprole 1 L', 'leche') > 0);
+  assert.ok(relevance('Leche entera Conaprole 1 L', 'leche entera') > relevance('Dulce de leche Conaprole 1 kg', 'leche entera'));
+  assert.ok(relevance('Dulce de leche Conaprole 1 kg', 'leche') < 0);
+  assert.equal(relevance('Papel higiénico 8 unidades', 'pollo'), 0);
+  assert.equal(officialStoreName('Macromercado- Suc. Las Piedras N°16'), 'Macromercado');
+  assert.deepEqual(bestOfficialArticles([
+    { id: 1, name: 'Arroz Blanco - Aruba' },
+    { id: 2, name: 'Harina de trigo' },
+    { id: 3, name: 'Arroz Parboiled' },
+  ], 'arroz', 2).map((item) => item.id), [1, 3]);
+  const official = parseOfficialBasket({
+    datos: [{ id: '1', Artículo: 'Arroz', 'Devoto | LAS PIEDRAS': '$35.0 - 12/08/26', 'Macromercado | Las Piedras': '$29.0 (*)' }],
+    establecimientos: [
+      { name: 'Devoto- Suc. LAS PIEDRAS', localidad: 'Las Piedras, CANELONES', direccion: 'Pouey 1', web: 'https://devoto.com.uy' },
+      { name: 'Macromercado- Suc. Las Piedras', localidad: 'Las Piedras, CANELONES', direccion: 'Ruta 5' },
+    ],
+  }, [{ id: 1, name: 'Arroz blanco', unidad: '1.0 Kilogramos' }]);
+  assert.equal(official.length, 1, 'estimated SIPC prices marked with (*) must be ignored');
+  assert.equal(official[0].store, 'Devoto');
+  assert.equal(official[0].comparisonPrice, 35);
+});
+
+test('supermarket mode loads live prices in batches and keeps a receipt fallback', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'supermarket.js'), 'utf8');
+  assert.match(app, /compareShoppingPrices/);
+  assert.match(app, /unique\.slice\(start, start \+ 6\)/);
+  assert.match(component, /Precios reales de Las Piedras/);
+  assert.match(component, /La app seguirá usando tus boletas/);
+  assert.match(component, /data-action="price-details"/);
 });
 

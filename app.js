@@ -189,7 +189,7 @@ async function comparePrices(name) {
         comparisonUnit: x.comparisonUnit || null,
         rankPrice: x.comparisonPrice || x.price,
         detail: x.product,
-        source: 'online',
+        source: x.source || 'online',
         km: (state.userLoc && state.supers) ? (nearestBranch(x.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null) : null,
       }));
     }
@@ -202,6 +202,40 @@ async function comparePrices(name) {
     if (!byStore.has(k)) byStore.set(k, c);
   }
   return [...byStore.values()].sort((a, b) => (a.rankPrice || a.price) - (b.rankPrice || b.price));
+}
+
+/** Compara varios productos en pocas llamadas para que el modo súper sea rápido. */
+async function compareShoppingPrices(names) {
+  const unique = [...new Set(names.map((name) => String(name || '').trim()).filter(Boolean))];
+  const output = {};
+  for (let start = 0; start < unique.length; start += 6) {
+    const terms = unique.slice(start, start + 6);
+    const response = await apiFetch(PRECIOS_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms }),
+    });
+    if (!response.ok) throw new Error(`PRICE_API_${response.status}`);
+    const data = await response.json();
+    for (const term of terms) {
+      const live = (data.queries?.[term]?.results || []).map((row) => ({
+        ...row,
+        rankPrice: row.comparisonPrice || row.price,
+        km: (state.userLoc && state.supers)
+          ? (nearestBranch(row.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null)
+          : null,
+      }));
+      const own = topPlaces(term, 10).map((row) => ({ ...row, source: 'boleta', product: term }));
+      const byStore = new Map();
+      for (const row of [...live, ...own]) {
+        const key = normalize(row.store);
+        if (!byStore.has(key)) byStore.set(key, row);
+      }
+      const results = [...byStore.values()].sort((a, b) => (a.rankPrice || a.price) - (b.rankPrice || b.price));
+      output[term] = { results, best: results[0] || null };
+    }
+  }
+  return output;
 }
 
 /** Texto compacto para comparar nombres de comercios (sin acentos ni símbolos) */
@@ -973,6 +1007,7 @@ async function boot() {
     getPending: pending,
     getMe: () => state.me,
     cheapestFor,
+    compareShoppingPrices,
     dealText,
     userOf,
     avatarHtml,

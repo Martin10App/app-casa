@@ -244,9 +244,10 @@ async function renderConsulta(transcript, product) {
     html += `<div class="voice-explore-title">💰 Dónde está más barato</div>`;
     html += all.map((c, i) => {
       const km = fmtKmShort(c.km);
-      const tag = c.source === 'online' ? '🌐 online hoy' : '🧾 tu precio';
+      const tag = c.source === 'online' ? '🌐 catálogo online' : c.source === 'oficial' ? '🏪 precio oficial reciente' : '🧾 tu precio';
+      const external = c.source === 'online' || c.source === 'oficial';
       return `
-        <button class="voice-item voice-consulta-place ${c.source === 'online' ? 'voice-online-place' : ''}" data-store="${escapeHtml(c.store)}" data-add="${escapeHtml(product)}">
+        <button class="voice-item voice-consulta-place ${external ? 'voice-online-place' : ''}" data-store="${escapeHtml(c.store)}" data-add="${escapeHtml(product)}">
           <span class="voice-consulta-medal">${medals[i] || '•'}</span>
           <span class="voice-item__body">
             <span class="voice-item__name">${escapeHtml(c.store)}</span>

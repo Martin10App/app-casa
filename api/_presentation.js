@@ -4,8 +4,8 @@ function number(value) { return Number(String(value).replace(',', '.')); }
 
 function presentation(text, packagePrice) {
   const value = String(text || '').toLowerCase();
-  const mass = /(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gr|gramos?)\b/.exec(value);
-  const volume = /(\d+(?:[.,]\d+)?)\s*(l|lts?|litros?|ml|cc)\b/.exec(value);
+  const mass = /(\d+(?:[.,]\d+)?)\s*(kg|kilos?|kilogramos?|g|gr|gramos?)\b/.exec(value);
+  const volume = /(\d+(?:[.,]\d+)?)\s*(l|lts?|litros?|ml|mililitros?|cc)\b/.exec(value);
   const units = /(?:x|pack\s*(?:de)?)\s*(\d+)\b/.exec(value);
   let baseAmount = null; let comparisonUnit = null; let sizeLabel = '';
   if (mass) {
