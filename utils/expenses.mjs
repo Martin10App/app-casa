@@ -57,8 +57,16 @@ function normalizedKey(value) {
   return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es-UY').trim();
 }
 
-function addMerchant(map, name, amount) {
+export function canonicalMerchant(name) {
   const display = name?.trim() || 'Sin lugar';
+  const key = normalizedKey(display);
+  // Los tickets de ANCAP pueden traer la razón social de la estación.
+  if (key.includes('ancap') || key.includes('bregu')) return 'ANCAP';
+  return display;
+}
+
+function addMerchant(map, name, amount) {
+  const display = canonicalMerchant(name);
   const key = normalizedKey(display);
   const current = map.get(key) || { key: display, total: 0 };
   current.total += amount;

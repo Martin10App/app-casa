@@ -76,9 +76,18 @@ test('card cycles run from day 24 through day 23 and reports stay separated', as
     { date: '2026-08-24', store: 'Nuevo', total: 777, paymentMethod: 'cash' },
   ], { start: '2026-07-24', end: '2026-08-23' });
   assert.equal(report.total, 2000);
-  assert.deepEqual(report.merchants.map((row) => [row.key, row.total]), [['Macromercado', 1500], ['Ancap', 500]]);
+  assert.deepEqual(report.merchants.map((row) => [row.key, row.total]), [['Macromercado', 1500], ['ANCAP', 500]]);
   assert.deepEqual(report.payments.map((row) => [row.key, row.total]), [['master_brou', 1500], ['debit', 500]]);
   assert.equal(report.products[0].quantity, 3);
   assert.equal(report.products[0].unit, 'kg');
+});
+
+test('ANCAP and its Bregu SRL receipt name are one merchant', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  const report = expenses.analyzeExpenses([
+    { date: '2026-08-01', store: 'ANCAP', total: 1200, paymentMethod: 'master_brou', expenseCategory: 'combustible' },
+    { date: '2026-08-10', store: 'BREGU S.R.L.', total: 800, paymentMethod: 'debit', expenseCategory: 'combustible' },
+  ], { start: '2026-07-24', end: '2026-08-23' });
+  assert.deepEqual(report.merchants, [{ key: 'ANCAP', total: 2000 }]);
 });
 
