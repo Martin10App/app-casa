@@ -13,6 +13,8 @@
    ============================================================ */
 
 const MODEL = 'gemini-2.5-flash';
+const { localISODate } = require('./_date');
+const { requireApiUser } = require('./_auth');
 const GEMINI = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 // Categorías válidas de la app (deben coincidir con utils/images.js)
@@ -28,13 +30,14 @@ const CORS_ORIGIN = 'https://martin10app.github.io';
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 module.exports = async (req, res) => {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
+  if (!(await requireApiUser(req, res))) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'Falta configurar GEMINI_API_KEY' });
@@ -42,9 +45,10 @@ module.exports = async (req, res) => {
   try {
     const { audio, mime } = req.body || {};
     if (!audio) return res.status(400).json({ error: 'No llegó el audio' });
+    if (typeof audio !== 'string' || audio.length > 3_500_000) return res.status(413).json({ error: 'Audio demasiado grande' });
 
     const hoy = new Date();
-    const hoyISO = hoy.toISOString().slice(0, 10);
+    const hoyISO = localISODate(hoy);
     const diaSemana = hoy.toLocaleDateString('es-UY', { weekday: 'long' });
 
     const prompt = `Sos el asistente de una app familiar del hogar en Uruguay (español rioplatense).

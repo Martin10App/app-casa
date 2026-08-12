@@ -41,6 +41,8 @@ export const isCloud = !FIREBASE_CONFIG.apiKey.startsWith('TU_');
 
 let adapter = null;
 
+const dataKey = (value = '') => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
 /* ============================================================
    ADAPTADOR NUBE — Firebase Firestore (SDK modular por CDN)
    ============================================================ */
@@ -61,6 +63,7 @@ async function createCloudAdapter() {
   const pricesCol  = fs.collection(db, 'prices');
   const invCol     = fs.collection(db, 'inventory');
   const comprasCol = fs.collection(db, 'compras');
+  const homeCardsCol = fs.collection(db, 'homeCards');
   const usersDoc  = fs.doc(db, 'meta', 'users');
   const homeDoc   = fs.doc(db, 'meta', 'home');
   const tokensDoc = fs.doc(db, 'meta', 'tokens');
@@ -98,8 +101,12 @@ async function createCloudAdapter() {
       await authMod.signOut(auth);
     },
 
+    async getAuthToken() {
+      return auth.currentUser ? auth.currentUser.getIdToken() : null;
+    },
+
     subscribeItems(cb) {
-      const q = fs.query(itemsCol, fs.orderBy('createdAt', 'desc'), fs.limit(500));
+      const q = fs.query(itemsCol, fs.orderBy('createdAt', 'desc'));
       return fs.onSnapshot(q, (snap) => {
         const items = snap.docs.map((d) => {
           const data = d.data();
@@ -194,16 +201,28 @@ async function createCloudAdapter() {
 
     /* ---- Personalización del inicio (fotos de tarjetas, portada) ---- */
     subscribeHome(cb) {
-      return fs.onSnapshot(homeDoc, (snap) => { if (snap.exists()) cb(snap.data()); });
+      let legacy = {};
+      let cards = {};
+      const emit = () => cb({ ...legacy, cards: { ...(legacy.cards || {}), ...cards } });
+      const unsubLegacy = fs.onSnapshot(homeDoc, (snap) => { legacy = snap.exists() ? snap.data() : {}; emit(); });
+      const unsubCards = fs.onSnapshot(homeCardsCol, (snap) => {
+        cards = Object.fromEntries(snap.docs.map((doc) => [doc.id, doc.data().photo]));
+        emit();
+      });
+      return () => { unsubLegacy(); unsubCards(); };
     },
 
     async saveHome(data) {
-      await fs.setDoc(homeDoc, data, { merge: true });
+      if (data.cardId && data.photo) {
+        await fs.setDoc(fs.doc(homeCardsCol, data.cardId), { photo: data.photo, updatedAt: fs.serverTimestamp() });
+      } else {
+        await fs.setDoc(homeDoc, data, { merge: true });
+      }
     },
 
     /* ---- Libreta de precios ---- */
     subscribePrices(cb) {
-      const q = fs.query(pricesCol, fs.orderBy('updatedAt', 'desc'), fs.limit(300));
+      const q = fs.query(pricesCol, fs.orderBy('updatedAt', 'desc'));
       return fs.onSnapshot(q, (snap) => {
         const list = snap.docs.map((d) => {
           const data = d.data();
@@ -224,7 +243,7 @@ async function createCloudAdapter() {
 
     /* ---- Compras (boletas escaneadas, con su desglose) ---- */
     subscribeCompras(cb) {
-      const q = fs.query(comprasCol, fs.orderBy('date', 'desc'), fs.limit(200));
+      const q = fs.query(comprasCol, fs.orderBy('date', 'desc'));
       return fs.onSnapshot(q, (snap) => {
         cb(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
       }, (err) => console.error('[Firestore] error de compras:', err));
@@ -236,12 +255,54 @@ async function createCloudAdapter() {
     },
 
     async deleteCompra(id) {
-      await fs.deleteDoc(fs.doc(comprasCol, id));
+      const batch = fs.writeBatch(db);
+      batch.delete(fs.doc(comprasCol, id));
+      batch.delete(fs.doc(itemsCol, `receipt_${id}`));
+      await batch.commit();
+    },
+
+    /** Atomically stores a receipt and every derived record. Safe to retry. */
+    async saveReceiptBundle(bundle) {
+      const receiptRef = fs.doc(comprasCol, bundle.purchase.id);
+      const inventoryRefs = bundle.inventory.map((item) => fs.doc(invCol, item.id));
+      const priceRefs = bundle.prices.map((product) => fs.doc(pricesCol, product.id));
+      return fs.runTransaction(db, async (tx) => {
+        const [receiptSnap, inventorySnaps, priceSnaps] = await Promise.all([
+          tx.get(receiptRef),
+          Promise.all(inventoryRefs.map((ref) => tx.get(ref))),
+          Promise.all(priceRefs.map((ref) => tx.get(ref))),
+        ]);
+        if (receiptSnap.exists()) return { duplicate: true };
+
+        const purchaseData = { ...bundle.purchase };
+        delete purchaseData.id;
+        tx.set(receiptRef, { ...purchaseData, createdAt: fs.serverTimestamp() });
+
+        bundle.inventory.forEach((item, index) => {
+          const current = inventorySnaps[index].exists() ? inventorySnaps[index].data() : {};
+          const { id, ...data } = item;
+          tx.set(inventoryRefs[index], { ...current, ...data, updatedAt: fs.serverTimestamp() });
+        });
+
+        bundle.prices.forEach((product, index) => {
+          const current = priceSnaps[index].exists() ? priceSnaps[index].data() : {};
+          const entries = [...(current.entries || [])];
+          const entryIndex = entries.findIndex((entry) => (entry.storeKey || dataKey(entry.store)) === product.entry.storeKey);
+          if (entryIndex >= 0) entries[entryIndex] = product.entry; else entries.push(product.entry);
+          tx.set(priceRefs[index], { ...current, name: current.name || product.name, entries, updatedAt: fs.serverTimestamp() });
+        });
+
+        if (bundle.expense) {
+          const { id, ...data } = bundle.expense;
+          tx.set(fs.doc(itemsCol, id), { ...data, createdAt: fs.serverTimestamp() });
+        }
+        return { duplicate: false };
+      });
     },
 
     /* ---- Inventario (lo que hay en casa) ---- */
     subscribeInventory(cb) {
-      const q = fs.query(invCol, fs.orderBy('updatedAt', 'desc'), fs.limit(500));
+      const q = fs.query(invCol, fs.orderBy('updatedAt', 'desc'));
       return fs.onSnapshot(q, (snap) => {
         const list = snap.docs.map((d) => {
           const data = d.data();
@@ -322,6 +383,7 @@ function createLocalAdapter() {
     onAuthChange(cb) { cb({ local: true }); return () => {}; },
     async signIn() {},
     async signOutUser() {},
+    async getAuthToken() { return null; },
 
     /* ---- Push: no aplica en modo local ---- */
     pushSupported() { return false; },
@@ -367,7 +429,11 @@ function createLocalAdapter() {
 
     async saveHome(data) {
       const current = read(KEY_HOME, {});
-      write(KEY_HOME, { ...current, ...data });
+      if (data.cardId && data.photo) {
+        write(KEY_HOME, { ...current, cards: { ...(current.cards || {}), [data.cardId]: data.photo } });
+      } else {
+        write(KEY_HOME, { ...current, ...data });
+      }
       emitHome();
     },
 
@@ -402,7 +468,38 @@ function createLocalAdapter() {
 
     async deleteCompra(id) {
       write(KEY_COMPRAS, read(KEY_COMPRAS, []).filter((c) => c.id !== id));
+      write(KEY_ITEMS, read(KEY_ITEMS, []).filter((item) => item.id !== `receipt_${id}`));
       emitCompras();
+      emitItems();
+    },
+
+    async saveReceiptBundle(bundle) {
+      const compras = read(KEY_COMPRAS, []);
+      if (compras.some((purchase) => purchase.id === bundle.purchase.id)) return { duplicate: true };
+      const inventory = read(KEY_INV, []);
+      const prices = read(KEY_PRICES, []);
+      const items = read(KEY_ITEMS, []);
+      const now = Date.now();
+
+      compras.push({ ...bundle.purchase, createdAt: now });
+      for (const incoming of bundle.inventory) {
+        const index = inventory.findIndex((item) => item.id === incoming.id);
+        const value = { ...(index >= 0 ? inventory[index] : {}), ...incoming, updatedAt: now };
+        if (index >= 0) inventory[index] = value; else inventory.push(value);
+      }
+      for (const incoming of bundle.prices) {
+        const index = prices.findIndex((product) => product.id === incoming.id);
+        const product = index >= 0 ? structuredClone(prices[index]) : { id: incoming.id, name: incoming.name, entries: [] };
+        const entryIndex = product.entries.findIndex((entry) => (entry.storeKey || dataKey(entry.store)) === incoming.entry.storeKey);
+        if (entryIndex >= 0) product.entries[entryIndex] = incoming.entry; else product.entries.push(incoming.entry);
+        product.updatedAt = now;
+        if (index >= 0) prices[index] = product; else prices.push(product);
+      }
+      if (bundle.expense) items.push({ ...bundle.expense, createdAt: now });
+
+      write(KEY_COMPRAS, compras); write(KEY_INV, inventory); write(KEY_PRICES, prices); write(KEY_ITEMS, items);
+      emitCompras(); emitInv(); emitPrices(); emitItems();
+      return { duplicate: false };
     },
 
     /* ---- Inventario ---- */
@@ -461,6 +558,7 @@ export const deletePrice    = (id)          => adapter.deletePrice(id);
 export const subscribeCompras     = (cb)    => adapter.subscribeCompras(cb);
 export const saveCompra           = (c)     => adapter.saveCompra(c);
 export const deleteCompra         = (id)    => adapter.deleteCompra(id);
+export const saveReceiptBundle    = (data)  => adapter.saveReceiptBundle(data);
 export const subscribeInventory   = (cb)    => adapter.subscribeInventory(cb);
 export const saveInventoryItem    = (item)  => adapter.saveInventoryItem(item);
 export const deleteInventoryItem  = (id)    => adapter.deleteInventoryItem(id);
@@ -468,6 +566,7 @@ export const authEnabled    = ()            => adapter.authEnabled;
 export const onAuthChange   = (cb)          => adapter.onAuthChange(cb);
 export const signIn         = ()            => adapter.signIn();
 export const signOutUser    = ()            => adapter.signOutUser();
+export const getAuthToken   = ()            => adapter.getAuthToken();
 export const pushSupported     = ()               => adapter.pushSupported();
 export const enablePush        = (vapid, userId)  => adapter.enablePush(vapid, userId);
 export const onPushForeground  = (cb)             => adapter.onPushForeground(cb);

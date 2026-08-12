@@ -10,6 +10,9 @@
    ============================================================ */
 
 const MODEL = 'gemini-2.5-flash';
+const { localISODate } = require('./_date');
+const { requireApiUser } = require('./_auth');
+const { presentation } = require('./_presentation');
 const GEMINI = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 const CATEGORIAS = [
@@ -23,13 +26,14 @@ const CORS_ORIGIN = 'https://martin10app.github.io';
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 module.exports = async (req, res) => {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
+  if (!(await requireApiUser(req, res))) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'Falta configurar GEMINI_API_KEY' });
@@ -37,8 +41,9 @@ module.exports = async (req, res) => {
   try {
     const { image, mime } = req.body || {};
     if (!image) return res.status(400).json({ error: 'No llegó la foto' });
+    if (typeof image !== 'string' || image.length > 4_000_000) return res.status(413).json({ error: 'Imagen demasiado grande' });
 
-    const hoyISO = new Date().toISOString().slice(0, 10);
+    const hoyISO = localISODate();
 
     const prompt = `Sos un lector de tickets de supermercado de Uruguay. Mirá la foto de la boleta y devolvé la compra desglosada.
 Hoy es ${hoyISO}.
@@ -100,6 +105,7 @@ No agregues nada fuera del JSON.`;
         const qty = Number.isFinite(it.qty) && it.qty > 0 ? Math.min(99, it.qty) : 1;
         const lineTotal = num(it.lineTotal);
         const unitPrice = num(it.unitPrice) || (lineTotal && qty ? +(lineTotal / qty).toFixed(2) : 0);
+        const pack = presentation(`${it.raw || ''} ${it.name || ''}`, unitPrice);
         return {
           name: String(it.name).trim().toLowerCase().slice(0, 60),
           raw: String(it.raw || '').trim().slice(0, 80),
@@ -107,6 +113,7 @@ No agregues nada fuera del JSON.`;
           unitPrice,
           lineTotal: lineTotal || +(unitPrice * qty).toFixed(2),
           category: CATEGORIAS.includes(it.category) ? it.category : 'despensa',
+          ...pack,
         };
       })
       .slice(0, 80);

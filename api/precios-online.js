@@ -10,6 +10,8 @@
    ============================================================ */
 
 const CORS_ORIGIN = 'https://martin10app.github.io';
+const { requireApiUser } = require('./_auth');
+const { presentation } = require('./_presentation');
 
 // Tiendas soportadas. Agregar una es sumar una línea acá.
 const STORES = [
@@ -21,7 +23,7 @@ const STORES = [
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 const UA = { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' };
@@ -41,8 +43,10 @@ function cheapestFromVtex(products) {
       for (const s of it.sellers || []) {
         const off = s.commertialOffer || {};
         if (off.Price > 0 && (off.AvailableQuantity == null || off.AvailableQuantity > 0)) {
-          if (!best || off.Price < best.price) {
-            best = { price: off.Price, product: p.productName, brand: p.brand || '', link: p.link || p.linkText || '' };
+          const pack = presentation(p.productName, off.Price);
+          const rankPrice = pack.comparisonPrice || off.Price;
+          if (!best || rankPrice < best.rankPrice) {
+            best = { price: off.Price, rankPrice, ...pack, product: p.productName, brand: p.brand || '', link: p.link || p.linkText || '' };
           }
         }
       }
@@ -68,6 +72,9 @@ async function queryStore(store, term) {
     return {
       store: store.name,
       price: Math.round(best.price),   // VTEX ya da el precio real (no centavos)
+      comparisonPrice: best.comparisonPrice,
+      comparisonUnit: best.comparisonUnit,
+      sizeLabel: best.sizeLabel,
       product: best.product,
       link: best.link ? (best.link.startsWith('http') ? best.link : `${store.host}/${best.link}`) : store.host,
     };
@@ -79,8 +86,9 @@ async function queryStore(store, term) {
 module.exports = async (req, res) => {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
+  if (!(await requireApiUser(req, res))) return;
 
-  const term = (req.query?.q || req.body?.q || '').toString().trim();
+  const term = (req.query?.q || req.body?.q || '').toString().trim().slice(0, 80);
   if (!term) return res.status(400).json({ error: 'Falta el producto (q)' });
 
   const results = (await Promise.all(STORES.map((s) => queryStore(s, term)))).filter(Boolean);

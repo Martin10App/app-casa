@@ -11,6 +11,7 @@
 import { $, $$, escapeHtml, fmtMoney } from '../utils/helpers.js';
 import { ICONS, CATEGORIES } from '../utils/images.js';
 import { toast } from './toast.js';
+import { apiFetch } from '../utils/api.js';
 
 // URL del cerebro (función serverless en Vercel)
 const VOICE_API = 'https://app-casa-omega.vercel.app/api/voz';
@@ -178,7 +179,7 @@ async function stopAndSend() {
   const b64 = arrayBufferToBase64(wav);
 
   try {
-    const resp = await fetch(VOICE_API, {
+    const resp = await apiFetch(VOICE_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: b64, mime: 'audio/wav' }),
@@ -251,7 +252,9 @@ async function renderConsulta(transcript, product) {
             <span class="voice-item__name">${escapeHtml(c.store)}</span>
             <span class="voice-item__cat">${tag}${km ? ` · 📍 a ${km}` : ''}</span>
           </span>
-          <span class="voice-consulta-price">${fmtMoney(c.price)}</span>
+          <span class="voice-consulta-price">${c.comparisonPrice && c.comparisonUnit
+            ? `${fmtMoney(c.comparisonPrice)}/${escapeHtml(c.comparisonUnit)}`
+            : fmtMoney(c.price)}</span>
         </button>`;
     }).join('');
   } else {
@@ -303,8 +306,9 @@ function renderReview(transcript, items) {
 
 async function addAll() {
   const chosen = [];
-  $$('.voice-item', overlay).forEach((row) => {
-    if (row.querySelector('.voice-item__check').checked) chosen.push(reviewItems[+row.dataset.i]);
+  $$('#voice-items .voice-item', overlay).forEach((row) => {
+    const checkbox = row.querySelector('.voice-item__check');
+    if (checkbox?.checked) chosen.push(reviewItems[+row.dataset.i]);
   });
   if (!chosen.length) { close(); return; }
   const btn = $('#voice-add', overlay);

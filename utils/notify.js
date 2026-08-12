@@ -9,6 +9,8 @@
    Firebase Cloud Messaging (ver README, paso opcional).
    ============================================================ */
 
+import { localISODate } from './date.js';
+
 /** Pide permiso de notificaciones sin molestar (solo la primera vez) */
 export async function requestNotifPermission() {
   if (!('Notification' in window)) return false;
@@ -30,7 +32,7 @@ export async function requestNotifPermission() {
 const REMIND_KEY = 'nh_reminded';
 
 function remindedToday() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   try {
     const saved = JSON.parse(localStorage.getItem(REMIND_KEY) || 'null');
     if (saved && saved.day === today) return saved;

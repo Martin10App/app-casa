@@ -1,0 +1,9 @@
+{
+  "name": "nuestro-hogar",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node tests/check-syntax.cjs"
+  }
+}
+

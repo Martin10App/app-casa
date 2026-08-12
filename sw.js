@@ -7,7 +7,7 @@
      (Firestore ya tiene su propia caché offline).
    ============================================================ */
 
-const CACHE = 'nuestro-hogar-v16';
+const CACHE = 'nuestro-hogar-v17';
 
 const SHELL = [
   './',
@@ -25,6 +25,8 @@ const SHELL = [
   './utils/helpers.js',
   './utils/images.js',
   './utils/notify.js',
+  './utils/date.js',
+  './utils/api.js',
   './utils/supers.js',
   './assets/supermercados.json',
   './icons/icon-192.png',
@@ -54,6 +56,9 @@ self.addEventListener('fetch', (e) => {
 
   // Firestore y APIs de Google: siempre red (tienen su propia caché)
   if (url.hostname.includes('googleapis.com') || url.hostname.includes('firestore') || url.hostname.includes('gstatic.com/firebasejs')) return;
+
+  // Las APIs propias contienen precios y datos en vivo: nunca usar cache-first.
+  if (url.hostname === 'app-casa-omega.vercel.app') return;
 
   // Imágenes externas (Unsplash, fuentes): cache-first con relleno
   if (url.origin !== location.origin) {

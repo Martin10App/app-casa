@@ -14,11 +14,12 @@
 import { $, $$, escapeHtml, uid, normalize, fmtMoney, fmtDate, compressImage } from '../utils/helpers.js';
 import { ICONS, CATEGORIES, productVisual, productGradient, productGradientDark } from '../utils/images.js';
 import { toast } from './toast.js';
+import { localISODate } from '../utils/date.js';
+import { apiFetch } from '../utils/api.js';
 
 const BOLETA_API = 'https://app-casa-omega.vercel.app/api/boleta';
 
-/* deps: { getMe, getPrices, getInventory, savePrice, saveInventoryItem,
-           saveCompra, addGasto, isDark } */
+/* deps: { getMe, getPrices, getInventory, saveReceiptBundle, isDark } */
 let deps = null;
 let overlay = null;
 let lectura = null;   // { store, date, total, items:[...] }
@@ -120,7 +121,7 @@ function pickPhoto() {
       // Comprimimos pero dejamos buena resolución: la letra del ticket es chica
       const dataUrl = await compressImage(file, 1600, 0.85);
       const b64 = dataUrl.split(',')[1];
-      const resp = await fetch(BOLETA_API, {
+      const resp = await apiFetch(BOLETA_API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: b64, mime: 'image/jpeg' }),
@@ -146,7 +147,7 @@ function pickPhoto() {
    ============================================================ */
 function renderReview() {
   $('#bol-store', overlay).value = lectura.store || '';
-  $('#bol-date', overlay).value = lectura.date || new Date().toISOString().slice(0, 10);
+  $('#bol-date', overlay).value = lectura.date || localISODate();
   $('#bol-total', overlay).value = lectura.total || '';
 
   $('#bol-items', overlay).innerHTML = lectura.items.map((it, i) => {
@@ -191,7 +192,7 @@ function compararConHistorial(name, price, store) {
    ============================================================ */
 async function guardar() {
   const store = $('#bol-store', overlay).value.trim();
-  const date = $('#bol-date', overlay).value || new Date().toISOString().slice(0, 10);
+  const date = $('#bol-date', overlay).value || localISODate();
   const total = parseFloat($('#bol-total', overlay).value) || 0;
   if (!store) { toast('¿En qué lugar compraste?', { emoji: '🏪' }); $('#bol-store', overlay).focus(); return; }
   if (!lectura.items.length) { toast('No quedó ningún producto', { emoji: '🤷' }); return; }
@@ -202,42 +203,57 @@ async function guardar() {
 
   try {
     const me = deps.getMe();
+    const signature = JSON.stringify({ store: normalize(store), date, total, items: lectura.items.map((it) => [normalize(it.raw || it.name), it.qty, it.lineTotal]) });
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature));
+    const receiptId = 'r_' + [...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('');
 
-    // 1) La compra con su desglose
-    await deps.saveCompra({
-      id: uid(), store, date, total,
-      items: lectura.items,
-      createdBy: me,
-    });
-
-    // 2) Cada producto → inventario (queda "tengo")
     const inv = deps.getInventory();
-    for (const it of lectura.items) {
+    const inventoryRows = lectura.items.map((it) => {
       const existente = inv.find((i) => normalize(i.name) === normalize(it.name));
-      await deps.saveInventoryItem({
+      return {
         id: existente?.id || uid(),
         name: existente?.name || it.name,
         category: it.category,
         status: 'tengo',
         updatedBy: me,
-      });
-    }
+      };
+    });
 
-    // 3) Cada precio → libreta de precios (así aprende dónde conviene)
     const precios = deps.getPrices();
-    for (const it of lectura.items) {
-      if (!it.unitPrice) continue;
+    const priceRows = lectura.items.filter((it) => it.unitPrice).map((it) => {
       const existente = precios.find((p) => normalize(p.name) === normalize(it.name));
-      const prod = existente ? structuredClone(existente) : { id: uid(), name: it.name, entries: [] };
-      prod.entries = prod.entries || [];
-      const idx = prod.entries.findIndex((e) => normalize(e.store) === normalize(store));
-      const entry = { id: idx >= 0 ? prod.entries[idx].id : uid(), store, price: it.unitPrice, date: Date.now(), by: me };
-      if (idx >= 0) prod.entries[idx] = entry; else prod.entries.push(entry);
-      await deps.savePrice(prod);
-    }
+      const oldEntry = existente?.entries?.find((entry) => normalize(entry.store) === normalize(store));
+      return {
+        id: existente?.id || uid(), name: existente?.name || it.name,
+        entry: {
+          id: oldEntry?.id || uid(), store, storeKey: normalize(store), price: it.unitPrice,
+          comparisonPrice: it.comparisonPrice || null, comparisonUnit: it.comparisonUnit || null,
+          sizeLabel: it.sizeLabel || '', date: Date.now(), by: me,
+        },
+      };
+    });
+    // A ticket can repeat the same product on more than one line. One write per document
+    // avoids transaction conflicts; the last reviewed line is the one retained.
+    const inventory = [...new Map(inventoryRows.map((item) => [item.id, item])).values()];
+    const prices = [...new Map(priceRows.map((product) => [product.id, product])).values()];
 
-    // 4) El total → Gastos
-    if (total > 0) await deps.addGasto(store, total, date, lectura.items.length);
+    const expense = total > 0 ? {
+      id: `receipt_${receiptId}`,
+      name: `Compra en ${store}`,
+      detail: `${lectura.items.length} producto${lectura.items.length === 1 ? '' : 's'} · boleta escaneada`,
+      category: 'gastos', priority: 'media', qty: 1, amount: total, dueDate: date, photo: null,
+      status: 'completado', completedBy: me, completedAt: Date.now(), createdBy: me, sourceReceiptId: receiptId,
+    } : null;
+
+    const result = await deps.saveReceiptBundle({
+      purchase: { id: receiptId, store, date, total, items: lectura.items, createdBy: me },
+      inventory, prices, expense,
+    });
+    if (result?.duplicate) {
+      toast('Esta boleta ya estaba guardada', { emoji: '🧾', duration: 5000 });
+      close();
+      return;
+    }
 
     toast(`Compra en <b>${escapeHtml(store)}</b> guardada · ${lectura.items.length} productos 🧾`, { emoji: '✅', type: 'success', duration: 5000 });
     close();

@@ -7,7 +7,7 @@
 
 import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveCompra, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveReceiptBundle, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
@@ -16,6 +16,8 @@ import { initBoleta, openBoleta } from './components/boleta.js';
 import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
+import { localISODate } from './utils/date.js';
+import { apiFetch } from './utils/api.js';
 
 /* ================= Estado ================= */
 const DEFAULT_USERS = {
@@ -105,7 +107,7 @@ function initHero() {
 function renderHeroStats() {
   const p = pending();
   const urgent = p.filter((i) => i.priority === 'alta').length;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   const dueSoon = p.filter((i) => i.dueDate && i.dueDate <= today).length;
 
   const pills = [`<span class="stat-pill">📝 ${p.length} pendiente${p.length === 1 ? '' : 's'}</span>`];
@@ -143,7 +145,12 @@ function topPlaces(name, n = 3) {
       const near = nearestBranch(e.store, userLoc.lat, userLoc.lon, supers);
       km = near ? near.km : null;
     }
-    return { store: e.store, price: e.price, km };
+    return {
+      store: e.store, price: e.price, km,
+      comparisonPrice: e.comparisonPrice || null,
+      comparisonUnit: e.comparisonUnit || null,
+      rankPrice: e.comparisonPrice || e.price,
+    };
   });
 
   if (userLoc && supers) {
@@ -151,7 +158,7 @@ function topPlaces(name, n = 3) {
     if (cerca.length) candidatos = cerca;
   }
 
-  return candidatos.sort((a, b) => a.price - b.price).slice(0, n);
+  return candidatos.sort((a, b) => a.rankPrice - b.rankPrice).slice(0, n);
 }
 
 /** El lugar más conveniente para un producto: { store, price, km } o null */
@@ -165,16 +172,19 @@ function cheapestFor(name) {
  * más caro: [{ store, price, km, source: 'boleta'|'online', detail }].
  */
 async function comparePrices(name) {
-  const mine = topPlaces(name, 10).map((p) => ({ store: p.store, price: p.price, km: p.km, source: 'boleta' }));
+  const mine = topPlaces(name, 10).map((p) => ({ ...p, source: 'boleta' }));
 
   let online = [];
   try {
-    const r = await fetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
+    const r = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
     if (r.ok) {
       const d = await r.json();
       online = (d.results || []).map((x) => ({
         store: x.store,
         price: x.price,
+        comparisonPrice: x.comparisonPrice || null,
+        comparisonUnit: x.comparisonUnit || null,
+        rankPrice: x.comparisonPrice || x.price,
         detail: x.product,
         source: 'online',
         km: (state.userLoc && state.supers) ? (nearestBranch(x.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null) : null,
@@ -188,7 +198,7 @@ async function comparePrices(name) {
     const k = normalize(c.store);
     if (!byStore.has(k)) byStore.set(k, c);
   }
-  return [...byStore.values()].sort((a, b) => a.price - b.price);
+  return [...byStore.values()].sort((a, b) => (a.rankPrice || a.price) - (b.rankPrice || b.price));
 }
 
 /** Texto compacto para comparar nombres de comercios (sin acentos ni símbolos) */
@@ -222,7 +232,10 @@ function nearbyStores({ maxKm = RADIO_KM, exclude = [], limit = 6 } = {}) {
 /** Texto listo para mostrar el "más barato": "Macromercado · $62 · a 2,8 km" */
 function dealText(deal) {
   if (!deal) return '';
-  return `${escapeHtml(deal.store)} · ${fmtMoney(deal.price)}${deal.km != null ? ` · a ${fmtKm(deal.km)}` : ''}`;
+  const comparable = deal.comparisonPrice && deal.comparisonUnit
+    ? ` (${fmtMoney(deal.comparisonPrice)}/${deal.comparisonUnit})`
+    : '';
+  return `${escapeHtml(deal.store)} · ${fmtMoney(deal.price)}${comparable}${deal.km != null ? ` · a ${fmtKm(deal.km)}` : ''}`;
 }
 
 /** Activa la ubicación en toda la app (para recomendar por cercanía) */
@@ -247,7 +260,7 @@ async function activarUbicacion() {
 function itemCardHtml(item, i) {
   const cat = CATEGORIES[item.category] || CATEGORIES.otros;
   const by = userOf(item.createdBy);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   const deal = item.status === 'pendiente' ? cheapestFor(item.name) : null;
   return `
     <article class="item-card" data-id="${item.id}" style="--i:${i}; --prio-color:${PRIO_COLOR[item.priority] || 'transparent'}">
@@ -588,7 +601,7 @@ const otherUser = () => (state.me === 'u1' ? 'u2' : 'u1');
 function pushToOther(title, body = '') {
   const tokens = state.tokens?.[otherUser()] || [];
   if (!tokens.length || !authEnabled()) return;
-  fetch(NOTIFY_API, {
+  apiFetch(NOTIFY_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tokens, title, body }),
@@ -622,7 +635,7 @@ async function activarNotificaciones() {
 /* ================= Recordatorios que avisan ================= */
 /** Si hay un recordatorio pendiente cuya fecha ya llegó, avisa (una vez por día). */
 function checkReminders() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   pending()
     .filter((it) => it.category === 'recordatorios' && it.dueDate && it.dueDate <= today && !wasRemindedToday(it.id))
     .forEach((it) => {
@@ -644,8 +657,7 @@ function pickCardPhoto(cardId) {
     try {
       toast('Procesando foto…', { emoji: '⏳', duration: 1500 });
       const dataUrl = await compressImage(file, 1000, 0.72);
-      const cards = { ...(state.home.cards || {}), [cardId]: dataUrl };
-      await saveHome({ cards });
+      await saveHome({ cardId, photo: dataUrl });
       toast('Foto actualizada ✓', { emoji: '📸', type: 'success' });
     } catch (err) {
       console.error(err);
@@ -957,19 +969,8 @@ async function boot() {
     getMe: () => state.me,
     getPrices: () => state.prices,
     getInventory: () => state.inventory,
-    savePrice,
-    saveInventoryItem,
-    saveCompra,
+    saveReceiptBundle,
     isDark,
-    addGasto: (store, total, date, cantidad) => addItem({
-      id: uid(),
-      name: `Compra en ${store}`,
-      detail: `${cantidad} producto${cantidad === 1 ? '' : 's'} · boleta escaneada`,
-      category: 'gastos', priority: 'media', qty: 1,
-      amount: total, dueDate: date, photo: null,
-      status: 'completado', completedBy: state.me, completedAt: Date.now(),
-      createdBy: state.me,
-    }),
   });
 
   // Libreta de precios
