@@ -1,6 +1,6 @@
 import { $, escapeHtml, fmtMoney, normalize, uid } from '../utils/helpers.js';
 import { CATEGORIES, ICONS } from '../utils/images.js';
-import { inferShoppingCategory, groupShoppingItems, shoppingInsights } from '../utils/shopping.mjs';
+import { inferShoppingCategory, groupShoppingItems, shoppingInsights, purchaseRecommendations } from '../utils/shopping.mjs';
 import { toast } from './toast.js';
 
 let deps;
@@ -8,7 +8,11 @@ let liveById = {};
 let loading = false;
 let loadError = false;
 let requestedSignature = '';
+let lastLiveRefresh = 0;
 const expanded = new Set();
+const LIVE_REFRESH_MS = 10 * 60 * 1000;
+let storefrontOverlay;
+let storefrontReturnFocus;
 
 function signature(items) {
   return items.map((item) => `${item.id}:${normalize(item.name)}`).sort().join('|');
@@ -71,7 +75,7 @@ export function renderSupermarket() {
 
   const liveCount = Object.values(deals).filter(isLive).length;
   let statusTitle = 'Precios reales de Las Piedras';
-  let statusText = liveCount ? `${liveCount} producto${liveCount === 1 ? '' : 's'} comparado${liveCount === 1 ? '' : 's'} ahora.` : 'Tocá actualizar para buscar ofertas actuales.';
+  let statusText = liveCount ? `${liveCount} producto${liveCount === 1 ? '' : 's'} comparado${liveCount === 1 ? '' : 's'} ahora. Se actualiza solo cada 10 min.` : 'Buscamos precios al abrir y luego cada 10 min.';
   if (loading) { statusTitle = 'Buscando precios…'; statusText = 'Consultando supermercados y la fuente oficial.'; }
   if (loadError) { statusTitle = 'No pudimos actualizar'; statusText = 'Seguimos mostrando tus precios guardados. Podés reintentar.'; }
 
@@ -81,6 +85,7 @@ export function renderSupermarket() {
     <div class="super-smart__tip">${ICONS.tag}<span><b>${escapeHtml(statusTitle)}</b><small>${escapeHtml(statusText)}</small></span>
       <button type="button" class="super-refresh" data-action="refresh-live" ${loading ? 'disabled' : ''} aria-label="Actualizar precios reales">${loading ? 'Buscando…' : 'Actualizar'}</button>
     </div>
+    <button type="button" class="super-enter" data-action="enter-store">${ICONS.basket}<span><b>Entrar al súper</b><small>Productos elegidos según tus boletas</small></span><i>${ICONS.back}</i></button>
     ${insight.bestStore ? `<div class="super-smart__recommend">${ICONS.spark}<span><b>Conviene mirar ${escapeHtml(insight.bestStore.store)}</b><small>Tiene el mejor precio en ${insight.bestStore.count} producto${insight.bestStore.count === 1 ? '' : 's'} de tu lista.</small></span></div>` : ''}`;
 
   $('#super-list').innerHTML = groups.length
@@ -120,12 +125,113 @@ async function refreshLivePrices(items = deps.getPending(), force = false) {
   try {
     const result = await deps.compareShoppingPrices(items.map((item) => item.name));
     liveById = Object.fromEntries(items.map((item) => [item.id, result[item.name] || { results: [], best: null }]));
+    lastLiveRefresh = Date.now();
   } catch (error) {
     console.warn('[precios supermercado]', error);
     loadError = true;
   } finally {
     loading = false;
     renderSupermarket();
+  }
+}
+
+function refreshLivePricesIfStale() {
+  if (document.visibilityState === 'visible' && Date.now() - lastLiveRefresh >= LIVE_REFRESH_MS) {
+    refreshLivePrices(deps.getPending());
+  }
+}
+
+function shortDate(value) {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('es-UY', { day: 'numeric', month: 'short' }).format(new Date(`${value}T12:00:00`));
+}
+
+function personalizedTop(recommendation, live = []) {
+  const byStore = new Map();
+  for (const row of live) byStore.set(normalize(row.store), row);
+  if (recommendation.macroPrice) byStore.set('macromercado', recommendation.macroPrice);
+  return [...byStore.values()]
+    .sort((a, b) => (Number(a.comparisonPrice) || Number(a.price)) - (Number(b.comparisonPrice) || Number(b.price)))
+    .slice(0, 3);
+}
+
+function storefrontCard(recommendation, comparison) {
+  const top = personalizedTop(recommendation, comparison?.results || []);
+  const visualItem = { name: recommendation.name, category: recommendation.category || inferShoppingCategory(recommendation.name) };
+  return `<article class="storefront-card">
+    ${deps.tileHtml(visualItem, 'storefront-card__visual')}
+    <div class="storefront-card__head"><div><h3>${escapeHtml(recommendation.name)}</h3><small>Lo compraron ${recommendation.times} ${recommendation.times === 1 ? 'vez' : 'veces'}</small></div><button type="button" class="storefront-add" data-storefront-add="${escapeHtml(recommendation.name)}" aria-label="Agregar ${escapeHtml(recommendation.name)} a la lista">${ICONS.plus}<span>Agregar</span></button></div>
+    <div class="storefront-ranking" aria-label="Top de precios de ${escapeHtml(recommendation.name)}">
+      ${top.length ? top.map((row, index) => `<div class="storefront-price ${index === 0 ? 'is-best' : ''}">
+        <span class="storefront-price__rank">${index + 1}</span>
+        <div><b>${escapeHtml(row.store)}</b><small>${row.card === 'Macropass' ? `Tu precio Macropass · boleta del ${shortDate(row.date)}` : row.source === 'online' ? 'Precio online consultado ahora' : row.source === 'oficial' ? `Precio oficial${row.observedAt ? ` · ${escapeHtml(row.observedAt)}` : ''}` : `Tu boleta${row.date ? ` · ${shortDate(row.date)}` : ''}`}</small></div>
+        <strong>${fmtMoney(row.price)}</strong>
+      </div>`).join('') : '<p class="storefront-no-price">Todavía no encontramos precios para comparar.</p>'}
+    </div>
+  </article>`;
+}
+
+function buildStorefrontOverlay() {
+  storefrontOverlay = document.createElement('div');
+  storefrontOverlay.className = 'modal-overlay';
+  storefrontOverlay.id = 'storefront-overlay';
+  storefrontOverlay.innerHTML = `<section class="modal storefront-modal" role="dialog" aria-modal="true" aria-labelledby="storefront-title">
+    <div class="modal__handle"></div>
+    <header class="modal__header"><div><h2 class="modal__title" id="storefront-title">Tu súper</h2><small class="storefront-subtitle">Elegido según lo que compran Martín y Lucía</small></div><button type="button" class="icon-btn" id="storefront-close" aria-label="Cerrar">${ICONS.close}</button></header>
+    <div class="modal__body storefront-body" id="storefront-body"></div>
+  </section>`;
+  document.body.appendChild(storefrontOverlay);
+  $('#storefront-close').addEventListener('click', closeStorefront);
+  storefrontOverlay.addEventListener('click', (event) => { if (event.target === storefrontOverlay) closeStorefront(); });
+  $('#storefront-body').addEventListener('click', addStorefrontProduct);
+}
+
+async function openStorefront(event) {
+  if (!storefrontOverlay) buildStorefrontOverlay();
+  storefrontReturnFocus = event?.currentTarget || null;
+  const recommendations = purchaseRecommendations(deps.getPurchases(), 8);
+  const body = $('#storefront-body');
+  storefrontOverlay.hidden = false;
+  requestAnimationFrame(() => storefrontOverlay.classList.add('is-open'));
+  document.body.classList.add('no-scroll');
+  if (!recommendations.length) {
+    body.innerHTML = '<div class="storefront-empty"><h3>Todavía estamos aprendiendo</h3><p>Cuando cargues productos desde tus boletas, aparecerán acá para volver a comprarlos y comparar precios.</p></div>';
+    return;
+  }
+  body.innerHTML = `<div class="storefront-intro"><b>Los productos de siempre, comparados para ustedes</b><small>El precio Macropass sale de tu última boleta. Los demás se consultan ahora.</small></div><div class="storefront-loading" role="status">${ICONS.spark}<span>Armando tu súper y buscando precios…</span></div>`;
+  try {
+    const comparisons = await deps.compareShoppingPrices(recommendations.map((item) => item.name));
+    body.innerHTML = `<div class="storefront-intro"><b>Los productos de siempre, comparados para ustedes</b><small>El precio Macropass sale de tu última boleta y muestra su fecha. Los demás se consultan ahora.</small></div><div class="storefront-grid">${recommendations.map((item) => storefrontCard(item, comparisons[item.name])).join('')}</div>`;
+  } catch (error) {
+    console.warn('[tu súper]', error);
+    body.innerHTML = `<div class="storefront-intro"><b>Tus compras habituales</b><small>No pudimos consultar precios actuales. Igual podés volver a agregar estos productos.</small></div><div class="storefront-grid">${recommendations.map((item) => storefrontCard(item, null)).join('')}</div>`;
+  }
+}
+
+function closeStorefront() {
+  storefrontOverlay?.classList.remove('is-open');
+  document.body.classList.remove('no-scroll');
+  setTimeout(() => {
+    if (storefrontOverlay) storefrontOverlay.hidden = true;
+    storefrontReturnFocus?.focus();
+  }, 250);
+}
+
+async function addStorefrontProduct(event) {
+  const button = event.target.closest('[data-storefront-add]');
+  if (!button) return;
+  const name = button.dataset.storefrontAdd;
+  button.disabled = true;
+  try {
+    const duplicate = deps.getPending().find((item) => normalize(item.name) === normalize(name));
+    if (duplicate) await deps.updateItem(duplicate.id, { qty: Math.min(99, (duplicate.qty || 1) + 1) });
+    else await deps.addItem({ id: uid(), name, detail: '', category: inferShoppingCategory(name), priority: 'media', qty: 1, amount: null, dueDate: null, photo: null, status: 'pendiente', completedBy: null, completedAt: null, createdBy: deps.getMe() });
+    button.innerHTML = `${ICONS.check}<span>Agregado</span>`;
+    toast(`<b>${escapeHtml(name)}</b> agregado a la lista`, { type: 'success' });
+  } catch (error) {
+    console.error('[tu súper agregar]', error);
+    button.disabled = false;
+    toast('No se pudo agregar. Probá de nuevo.', { emoji: '⚠️' });
   }
 }
 
@@ -165,6 +271,8 @@ export function initSupermarket(dependencies) {
   $('#super-quick-form').addEventListener('submit', quickAdd);
   $('#super-smart').addEventListener('click', (event) => {
     if (event.target.closest('[data-action="refresh-live"]')) refreshLivePrices(deps.getPending(), true);
+    const enter = event.target.closest('[data-action="enter-store"]');
+    if (enter) openStorefront({ currentTarget: enter });
   });
   $('#super-list').addEventListener('click', (event) => {
     const button = event.target.closest('[data-action="price-details"]');
@@ -175,4 +283,6 @@ export function initSupermarket(dependencies) {
     if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
     renderSupermarket();
   });
+  setInterval(refreshLivePricesIfStale, LIVE_REFRESH_MS);
+  document.addEventListener('visibilitychange', refreshLivePricesIfStale);
 }

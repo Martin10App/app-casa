@@ -155,6 +155,28 @@ test('supermarket insights estimate prices and recommend the best-covered store'
   assert.deepEqual(insight.bestStore, { store: 'Macromercado', count: 2 });
 });
 
+test('personalized supermarket learns repeated products and Macropass prices from receipts', async () => {
+  const { purchaseRecommendations } = await import('../utils/shopping.mjs');
+  const products = purchaseRecommendations([
+    { date: '2026-07-10', store: 'Macromercado', items: [{ name: 'Yogur', unitPrice: 80, category: 'lacteos' }, { name: 'Arroz', unitPrice: 70 }] },
+    { date: '2026-08-01', store: 'Feria', items: [{ name: 'Yogur', unitPrice: 95, category: 'lacteos' }] },
+    { date: '2026-08-12', store: 'Macro Mercado', items: [{ name: 'Yogur', lineTotal: 180, purchaseQuantity: 2, category: 'lacteos' }] },
+  ]);
+  assert.equal(products[0].name, 'Yogur');
+  assert.equal(products[0].times, 3);
+  assert.deepEqual(products[0].macroPrice, { store: 'Macromercado', price: 90, date: '2026-08-12', source: 'boleta', card: 'Macropass', comparisonPrice: null, comparisonUnit: null });
+  assert.equal(products[1].name, 'Arroz');
+});
+
+test('personalized supermarket exposes receipt-based products and a top-three comparison', () => {
+  const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'supermarket.js'), 'utf8');
+  assert.match(component, /Entrar al súper/);
+  assert.match(component, /purchaseRecommendations/);
+  assert.match(component, /slice\(0, 3\)/);
+  assert.match(component, /Tu precio Macropass/);
+  assert.match(component, /data-storefront-add/);
+});
+
 test('live price matching rejects unrelated products and prefers exact grocery names', () => {
   const { relevance, bestOfficialArticles, officialStoreName, parseOfficialBasket } = require('../api/precios-online')._test;
   assert.ok(relevance('Leche entera Conaprole 1 L', 'leche') > 0);
@@ -177,6 +199,25 @@ test('live price matching rejects unrelated products and prefers exact grocery n
   assert.equal(official.length, 1, 'estimated SIPC prices marked with (*) must be ignored');
   assert.equal(official[0].store, 'Devoto');
   assert.equal(official[0].comparisonPrice, 35);
+});
+
+test('official Las Piedras prices retain Supermercado Persa as a comparison source', () => {
+  const { parseOfficialBasket } = require('../api/precios-online')._test;
+  const official = parseOfficialBasket({
+    datos: [{ id: '9', Artículo: 'Arroz', 'Supermercado Persa | Las Piedras': '$42.0 - 13/08/26' }],
+    establecimientos: [{ name: 'Supermercado Persa', localidad: 'Las Piedras, CANELONES', direccion: 'Avda. Gral. Artigas 483' }],
+  }, [{ id: 9, name: 'Arroz blanco', unidad: '1.0 Kilogramos' }]);
+  assert.equal(official.length, 1);
+  assert.equal(official[0].store, 'Supermercado Persa');
+  assert.equal(official[0].price, 42);
+});
+
+test('supermarket refreshes live prices periodically and when returning to the app', () => {
+  const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'supermarket.js'), 'utf8');
+  assert.match(component, /LIVE_REFRESH_MS = 10 \* 60 \* 1000/);
+  assert.match(component, /setInterval/);
+  assert.match(component, /visibilitychange/);
+  assert.match(component, /Se actualiza solo cada 10 min/);
 });
 
 test('supermarket mode loads live prices in batches and keeps a receipt fallback', () => {

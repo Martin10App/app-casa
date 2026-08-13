@@ -60,3 +60,50 @@ export function shoppingInsights(items, dealsById = {}) {
     bestStore,
   };
 }
+
+function itemUnitPrice(item) {
+  const direct = Number(item?.unitPrice);
+  if (direct > 0) return direct;
+  const quantity = Number(item?.purchaseQuantity ?? item?.qty) || 1;
+  const total = Number(item?.lineTotal);
+  return total > 0 ? total / quantity : 0;
+}
+
+export function purchaseRecommendations(purchases, limit = 8) {
+  const products = new Map();
+  const supermarketCategories = new Set(['frutas', 'verduras', 'carnes', 'lacteos', 'bebidas', 'limpieza', 'farmacia', 'mascotas', 'despensa', 'compras']);
+  const ordered = [...(purchases || [])].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  for (const purchase of ordered) {
+    const date = String(purchase.date || '').slice(0, 10);
+    const store = String(purchase.store || 'Sin lugar').trim();
+    const isMacro = /macro\s*mercado/i.test(store);
+    const seen = new Set();
+    for (const item of purchase.items || []) {
+      const name = String(item.name || '').trim();
+      const key = normalize(name);
+      const category = item.category || inferShoppingCategory(name);
+      if (!key || !supermarketCategories.has(category)) continue;
+      const current = products.get(key) || { name, category, times: 0, lastDate: '', lastPrice: null, macroPrice: null };
+      if (!seen.has(key)) current.times += 1;
+      seen.add(key);
+      const price = itemUnitPrice(item);
+      if (date >= current.lastDate) {
+        current.name = name;
+        current.category = item.category || current.category;
+        current.lastDate = date;
+        if (price > 0) current.lastPrice = { store, price, date };
+      }
+      if (isMacro && price > 0 && (!current.macroPrice || date >= current.macroPrice.date)) {
+        current.macroPrice = {
+          store: 'Macromercado', price, date, source: 'boleta', card: 'Macropass',
+          comparisonPrice: Number(item.comparisonPrice) || null,
+          comparisonUnit: item.comparisonUnit || null,
+        };
+      }
+      products.set(key, current);
+    }
+  }
+  return [...products.values()]
+    .sort((a, b) => b.times - a.times || b.lastDate.localeCompare(a.lastDate) || a.name.localeCompare(b.name, 'es'))
+    .slice(0, Math.max(0, limit));
+}
