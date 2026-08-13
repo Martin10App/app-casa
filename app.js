@@ -16,6 +16,8 @@ import { initBoleta, openBoleta } from './components/boleta.js';
 import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycle } from './components/expenses.js';
 import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
 import { initSupermarket, renderSupermarket } from './components/supermarket.js';
+import { initBarcodeScanner } from './components/barcode.js';
+import { inferShoppingCategory } from './utils/shopping.mjs';
 import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
@@ -236,6 +238,41 @@ async function compareShoppingPrices(names) {
     }
   }
   return output;
+}
+
+/** Identifica un producto por EAN/UPC y completa la respuesta con precios comparables. */
+async function lookupBarcode(barcode) {
+  const response = await apiFetch(PRECIOS_API, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ barcode }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `BARCODE_API_${response.status}`);
+  if (!data.product?.searchTerm) return { ...data, comparableResults: [] };
+
+  try {
+    const comparableResponse = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(data.product.searchTerm)}`);
+    if (!comparableResponse.ok) return { ...data, comparableResults: [] };
+    const comparableData = await comparableResponse.json();
+    return { ...data, comparableResults: comparableData.results || [] };
+  } catch {
+    return { ...data, comparableResults: [] };
+  }
+}
+
+async function addScannedItem(name) {
+  const duplicate = pending().find((item) => normalize(item.name) === normalize(name));
+  if (duplicate) {
+    const qty = Math.min(99, (duplicate.qty || 1) + 1);
+    await updateItem(duplicate.id, { qty });
+    return { duplicate: true, name: duplicate.name, qty };
+  }
+  const category = inferShoppingCategory(name);
+  await addItem({
+    id: uid(), name, detail: '', category, priority: 'media', qty: 1, amount: null, dueDate: null,
+    photo: null, status: 'pendiente', completedBy: null, completedAt: null, createdBy: state.me,
+  });
+  pushToOther(`${userOf(state.me).name} agregó: ${name}`, CATEGORIES[category]?.label || 'Compras');
+  return { duplicate: false, name, qty: 1 };
 }
 
 /** Texto compacto para comparar nombres de comercios (sin acentos ni símbolos) */
@@ -1016,6 +1053,8 @@ async function boot() {
     addItem,
     notifyOther: (name, category) => pushToOther(`${userOf(state.me).name} agregó: ${name}`, CATEGORIES[category]?.label || 'Compras'),
   });
+
+  initBarcodeScanner({ lookupBarcode, addScannedItem });
 
   // Libreta de precios
   initPrices({

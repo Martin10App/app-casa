@@ -166,3 +166,42 @@ test('supermarket mode loads live prices in batches and keeps a receipt fallback
   assert.match(component, /data-action="price-details"/);
 });
 
+test('barcode validation accepts retail GTINs and rejects malformed values', () => {
+  const { cleanBarcode, validBarcode, sameBarcode, genericProductTerm } = require('../api/precios-online')._test;
+  assert.equal(cleanBarcode(' 5449-0000-0099-6 '), '5449000000996');
+  assert.equal(validBarcode('5449000000996'), true);
+  assert.equal(validBarcode('5449000000997'), false);
+  assert.equal(validBarcode('15449000000996'), false);
+  assert.equal(validBarcode('1234'), false);
+  assert.equal(sameBarcode('0773012345678', '773012345678'), true);
+  assert.equal(genericProductTerm('Yogur Conaprole natural 500 ml'), 'yogur');
+  assert.equal(genericProductTerm('Coca-Cola', ['bebidas cafeína']), 'coca cola');
+});
+
+test('barcode exact-match helpers never label a different product as identical', () => {
+  const { tataExactProduct, elDoradoExactProduct } = require('../api/precios-online')._test;
+  const tataNode = {
+    name: 'Yogur natural 500 ml', slug: 'yogur', gtin: '5449000000996', image: [],
+    offers: { offers: [{ price: 95, listPrice: 100, availability: 'https://schema.org/InStock' }] },
+  };
+  const tata = tataExactProduct(tataNode, '5449000000996');
+  assert.equal(tata.result.store, 'Ta-Ta');
+  assert.equal(tataExactProduct({ ...tataNode, gtin: '1111111111111' }, '5449000000996'), null);
+
+  const product = { productName: 'Refresco 600 ml', link: '/refresco', items: [{ ean: '5449000000996', images: [], sellers: [{ commertialOffer: { Price: 80, ListPrice: 90, AvailableQuantity: 2 } }] }] };
+  assert.equal(elDoradoExactProduct(product, '5449000000996').result.store, 'El Dorado');
+  assert.equal(elDoradoExactProduct(product, '7790000000000'), null);
+});
+
+test('supermarket exposes a camera, photo and manual barcode comparison flow', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const scanner = fs.readFileSync(path.join(__dirname, '..', 'components', 'barcode.js'), 'utf8');
+  assert.match(html, /id="super-scan"/);
+  assert.match(html, /id="barcode-input"[^>]+inputmode="numeric"/);
+  assert.match(scanner, /vendor\/zxing-browser\.min\.js/);
+  assert.match(scanner, /decodeFromConstraints/);
+  assert.match(scanner, /decodeFromImageUrl/);
+  assert.match(scanner, /Mismo código encontrado/);
+  assert.match(scanner, /Precios comparables/);
+});
+

@@ -11,7 +11,9 @@ const LAS_PIEDRAS_BOUNDS = { v1: -56.28, v2: -34.78, v3: -56.16, v4: -34.68 };
 const SIPC_BASE = 'https://www.precios.uy/sipc2Web/recursos/sipc';
 const CACHE_MS = 10 * 60 * 1000;
 const ARTICLE_CACHE_MS = 6 * 60 * 60 * 1000;
+const BARCODE_CACHE_MS = 24 * 60 * 60 * 1000;
 const cache = new Map();
+const barcodeCache = new Map();
 let articleCache = { expires: 0, value: [] };
 
 const UA = {
@@ -44,6 +46,28 @@ function relevance(name, term) {
   const genericMilk = wanted.length === 1 && wanted[0] === 'leche';
   if (genericMilk && /dulce|chocolat|polvo|crema|helado/.test(haystack)) score -= 20;
   return score;
+}
+
+function cleanBarcode(value = '') {
+  return String(value).replace(/\D/g, '');
+}
+
+function validBarcode(value = '') {
+  const code = cleanBarcode(value);
+  if (![8, 12, 13, 14].includes(code.length)) return false;
+  // UPC-E usa una expansión propia: se acepta su formato numérico de 8 dígitos
+  // y los demás GTIN se validan con el dígito de control estándar.
+  if (code.length === 8) return true;
+  const digits = [...code].map(Number);
+  const check = digits.pop();
+  const sum = digits.reverse().reduce((total, digit, index) => total + digit * (index % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+function sameBarcode(left, right) {
+  const a = cleanBarcode(left).replace(/^0+/, '');
+  const b = cleanBarcode(right).replace(/^0+/, '');
+  return Boolean(a && b && a === b);
 }
 
 async function fetchJson(url, options = {}, timeoutMs = 6500) {
@@ -101,6 +125,28 @@ async function queryTata(term) {
   });
 }
 
+function tataExactProduct(node, barcode) {
+  const offer = node?.offers?.offers?.find((row) => row.price > 0 && (!row.availability || row.availability.includes('InStock')));
+  const gtins = [node?.gtin, ...(node?.offers?.offers || []).map((row) => row?.itemOffered?.gtin)];
+  if (!offer || !gtins.some((gtin) => sameBarcode(gtin, barcode))) return null;
+  const result = resultFromProduct('Ta-Ta', node.name, offer.price, `https://www.tata.com.uy/${node.slug}/p`, { listPrice: offer.listPrice });
+  return result ? { result, brand: node.brand?.name || node.brand?.brandName || '', image: node.image?.[0]?.url || '' } : null;
+}
+
+async function queryTataBarcode(barcode) {
+  const variables = {
+    first: 18, after: '0', sort: 'score_desc', term: barcode,
+    selectedFacets: [
+      { key: 'channel', value: JSON.stringify({ salesChannel: '4', regionId: '' }) },
+      { key: 'locale', value: 'es-uy' },
+    ],
+  };
+  const url = `https://www.tata.com.uy/api/graphql?operationName=ProductsQuery&variables=${encodeURIComponent(JSON.stringify(variables))}`;
+  const data = await fetchJson(url);
+  const nodes = data?.data?.search?.products?.edges?.map((edge) => edge.node) || [];
+  return nodes.map((node) => tataExactProduct(node, barcode)).find(Boolean) || null;
+}
+
 async function queryElDorado(term) {
   const url = `https://www.eldorado.com.uy/api/catalog_system/pub/products/search/${encodeURIComponent(term)}?_from=0&_to=17`;
   const products = await fetchJson(url);
@@ -130,6 +176,82 @@ async function queryElDorado(term) {
   return resultFromProduct('El Dorado', best.product.productName, best.offer.Price, link, {
     listPrice: best.offer.ListPrice,
   });
+}
+
+function elDoradoExactProduct(product, barcode) {
+  for (const item of product?.items || []) {
+    if (!sameBarcode(item.ean, barcode)) continue;
+    for (const seller of item.sellers || []) {
+      const offer = seller.commertialOffer || {};
+      if (!(offer.Price > 0) || (offer.AvailableQuantity != null && offer.AvailableQuantity <= 0)) continue;
+      const slug = product.link || product.linkText || '';
+      const link = slug.startsWith('http') ? slug : `https://www.eldorado.com.uy/${slug.replace(/^\//, '')}`;
+      const result = resultFromProduct('El Dorado', product.productName, offer.Price, link, { listPrice: offer.ListPrice });
+      return result ? { result, brand: product.brand || '', image: item.images?.[0]?.imageUrl || '' } : null;
+    }
+  }
+  return null;
+}
+
+async function queryElDoradoBarcode(barcode) {
+  const url = `https://www.eldorado.com.uy/api/catalog_system/pub/products/search?fq=alternateIds_Ean:${encodeURIComponent(barcode)}`;
+  const products = await fetchJson(url);
+  return (Array.isArray(products) ? products : []).map((product) => elDoradoExactProduct(product, barcode)).find(Boolean) || null;
+}
+
+const GENERIC_TERMS = [
+  'yogur', 'leche', 'queso', 'manteca', 'arroz', 'harina', 'aceite', 'fideos', 'pasta', 'galletas',
+  'café', 'cafe', 'yerba', 'azúcar', 'azucar', 'sal', 'agua', 'refresco', 'jugo', 'cerveza', 'vino',
+  'detergente', 'suavizante', 'jabón', 'jabon', 'shampoo', 'papel higiénico', 'papel higienico',
+  'pollo', 'carne', 'atún', 'atun', 'mayonesa', 'ketchup', 'mermelada', 'chocolate', 'cereal', 'avena',
+];
+
+function genericProductTerm(name = '', categoryTags = []) {
+  const text = normalize(`${name} ${(categoryTags || []).join(' ')}`);
+  const padded = ` ${text} `;
+  const match = GENERIC_TERMS.find((term) => padded.includes(` ${normalize(term)} `));
+  if (match) return normalize(match).replace('cafe', 'café').replace('azucar', 'azúcar').replace('jabon', 'jabón').replace('atun', 'atún');
+  return tokens(name).slice(0, 2).join(' ');
+}
+
+async function queryOpenFoodFacts(barcode) {
+  const fields = 'code,product_name_es,product_name,brands,quantity,image_front_small_url,categories_tags';
+  const data = await fetchJson(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=${fields}`, {}, 6500);
+  if (data?.status !== 1 || !data.product) return null;
+  const product = data.product;
+  const name = String(product.product_name_es || product.product_name || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    brand: String(product.brands || '').split(',')[0].trim(),
+    quantity: String(product.quantity || '').trim(),
+    image: /^https:\/\//i.test(product.image_front_small_url || '') ? product.image_front_small_url : '',
+    categoryTags: Array.isArray(product.categories_tags) ? product.categories_tags : [],
+  };
+}
+
+async function productForBarcode(rawBarcode) {
+  const barcode = cleanBarcode(rawBarcode);
+  if (!validBarcode(barcode)) return { error: 'El código no es un EAN o UPC válido.' };
+  const saved = barcodeCache.get(barcode);
+  if (saved?.expires > Date.now()) return saved.value;
+
+  const [tata, elDorado, openFoodFacts] = await Promise.all([
+    queryTataBarcode(barcode), queryElDoradoBarcode(barcode), queryOpenFoodFacts(barcode),
+  ]);
+  const exactResults = [tata?.result, elDorado?.result].filter(Boolean)
+    .map((row) => ({ ...row, match: 'exact' })).sort((a, b) => a.price - b.price);
+  const source = tata || elDorado;
+  const product = source ? {
+    name: source.result.product, brand: source.brand, quantity: source.result.sizeLabel || '', image: source.image,
+  } : openFoodFacts;
+  const value = {
+    barcode,
+    product: product ? { ...product, searchTerm: genericProductTerm(product.name, product.categoryTags) } : null,
+    exactResults,
+  };
+  barcodeCache.set(barcode, { value, expires: Date.now() + BARCODE_CACHE_MS });
+  return value;
 }
 
 async function officialArticles() {
@@ -225,6 +347,12 @@ async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (!(await requireApiUser(req, res))) return;
 
+  if (req.body?.barcode != null) {
+    const lookup = await productForBarcode(req.body.barcode);
+    if (lookup.error) return res.status(400).json({ error: lookup.error });
+    return res.status(200).json({ ...lookup, area: 'Las Piedras', checkedAt: new Date().toISOString() });
+  }
+
   const incoming = req.body?.terms || (req.query?.q || req.body?.q ? [req.query?.q || req.body?.q] : []);
   const terms = [...new Set((Array.isArray(incoming) ? incoming : [incoming])
     .map((value) => String(value || '').trim().slice(0, 80)).filter(Boolean))].slice(0, 6);
@@ -237,4 +365,8 @@ async function handler(req, res) {
 }
 
 module.exports = handler;
-module.exports._test = { normalize, relevance, bestOfficialArticles, officialStoreName, resultFromProduct, parseOfficialBasket, queryOfficial, pricesForTerm };
+module.exports._test = {
+  normalize, relevance, bestOfficialArticles, officialStoreName, resultFromProduct, parseOfficialBasket,
+  queryOfficial, pricesForTerm, cleanBarcode, validBarcode, sameBarcode, genericProductTerm,
+  tataExactProduct, elDoradoExactProduct, queryOpenFoodFacts, productForBarcode,
+};
