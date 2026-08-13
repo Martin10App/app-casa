@@ -168,6 +168,20 @@ test('personalized supermarket learns repeated products and Macropass prices fro
   assert.equal(products[1].name, 'Arroz');
 });
 
+test('personalized supermarket also recovers receipt products from the price notebook', async () => {
+  const { purchaseRecommendations } = await import('../utils/shopping.mjs');
+  const savedPrices = Array.from({ length: 42 }, (_, index) => ({
+    name: `Producto ${index + 1}`,
+    category: index % 2 ? 'limpieza' : 'despensa',
+    entries: [{ store: index === 41 ? 'Macromercado' : 'Persa', price: 50 + index, date: Date.UTC(2026, 7, index + 1) }],
+  }));
+  const products = purchaseRecommendations([], savedPrices, 36);
+  assert.equal(products.length, 36);
+  const macro = products.find((item) => item.name === 'Producto 42');
+  assert.equal(macro.lastPrice.store, 'Macromercado');
+  assert.equal(macro.macroPrice.card, 'Macropass');
+});
+
 test('personalized supermarket exposes receipt-based products and a top-three comparison', () => {
   const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'supermarket.js'), 'utf8');
   assert.match(component, /Entrar al súper/);
@@ -175,6 +189,9 @@ test('personalized supermarket exposes receipt-based products and a top-three co
   assert.match(component, /slice\(0, 3\)/);
   assert.match(component, /Tu precio Macropass/);
   assert.match(component, /data-storefront-add/);
+  assert.match(component, /deps\.getPrices\(\), 36/);
+  assert.match(component, /data-storefront-category/);
+  assert.match(component, /id="storefront-search"/);
 });
 
 test('live price matching rejects unrelated products and prefers exact grocery names', () => {

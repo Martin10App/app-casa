@@ -1050,6 +1050,7 @@ async function boot() {
   initSupermarket({
     getPending: pending,
     getPurchases: () => state.compras,
+    getPrices: () => state.prices,
     getMe: () => state.me,
     cheapestFor,
     compareShoppingPrices,

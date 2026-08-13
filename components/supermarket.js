@@ -13,6 +13,11 @@ const expanded = new Set();
 const LIVE_REFRESH_MS = 10 * 60 * 1000;
 let storefrontOverlay;
 let storefrontReturnFocus;
+let storefrontRecommendations = [];
+let storefrontComparisons = {};
+let storefrontCategory = 'all';
+let storefrontSearch = '';
+let storefrontRequestId = 0;
 
 function signature(items) {
   return items.map((item) => `${item.id}:${normalize(item.name)}`).sort().join('|');
@@ -148,6 +153,7 @@ function shortDate(value) {
 
 function personalizedTop(recommendation, live = []) {
   const byStore = new Map();
+  if (recommendation.lastPrice) byStore.set(normalize(recommendation.lastPrice.store), recommendation.lastPrice);
   for (const row of live) byStore.set(normalize(row.store), row);
   if (recommendation.macroPrice) byStore.set('macromercado', recommendation.macroPrice);
   return [...byStore.values()]
@@ -158,9 +164,12 @@ function personalizedTop(recommendation, live = []) {
 function storefrontCard(recommendation, comparison) {
   const top = personalizedTop(recommendation, comparison?.results || []);
   const visualItem = { name: recommendation.name, category: recommendation.category || inferShoppingCategory(recommendation.name) };
+  const historyLabel = recommendation.times > 0
+    ? `Lo compraron ${recommendation.times} ${recommendation.times === 1 ? 'vez' : 'veces'}`
+    : 'Visto en tus boletas';
   return `<article class="storefront-card">
     ${deps.tileHtml(visualItem, 'storefront-card__visual')}
-    <div class="storefront-card__head"><div><h3>${escapeHtml(recommendation.name)}</h3><small>Lo compraron ${recommendation.times} ${recommendation.times === 1 ? 'vez' : 'veces'}</small></div><button type="button" class="storefront-add" data-storefront-add="${escapeHtml(recommendation.name)}" aria-label="Agregar ${escapeHtml(recommendation.name)} a la lista">${ICONS.plus}<span>Agregar</span></button></div>
+    <div class="storefront-card__head"><div><h3>${escapeHtml(recommendation.name)}</h3><small>${historyLabel}</small></div><button type="button" class="storefront-add" data-storefront-add="${escapeHtml(recommendation.name)}" aria-label="Agregar ${escapeHtml(recommendation.name)} a la lista">${ICONS.plus}<span>Agregar</span></button></div>
     <div class="storefront-ranking" aria-label="Top de precios de ${escapeHtml(recommendation.name)}">
       ${top.length ? top.map((row, index) => `<div class="storefront-price ${index === 0 ? 'is-best' : ''}">
         <span class="storefront-price__rank">${index + 1}</span>
@@ -169,6 +178,60 @@ function storefrontCard(recommendation, comparison) {
       </div>`).join('') : '<p class="storefront-no-price">Todavía no encontramos precios para comparar.</p>'}
     </div>
   </article>`;
+}
+
+function storefrontCategoryLabel(category) {
+  return CATEGORIES[category]?.label || 'Otros';
+}
+
+function storefrontCategoryIcon(category) {
+  return ICONS[CATEGORIES[category]?.icon] || ICONS.box;
+}
+
+function renderStorefrontResults() {
+  const host = $('#storefront-results');
+  if (!host) return;
+  const visible = storefrontRecommendations.filter((item) => {
+    const inCategory = storefrontCategory === 'all' || item.category === storefrontCategory;
+    return inCategory && normalize(item.name).includes(storefrontSearch);
+  });
+  const grouped = new Map();
+  for (const item of visible) {
+    const category = item.category || 'compras';
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(item);
+  }
+  $('#storefront-count').textContent = `${visible.length} producto${visible.length === 1 ? '' : 's'}`;
+  host.innerHTML = visible.length ? [...grouped].map(([category, items]) => `<section class="storefront-section">
+    <header>${storefrontCategoryIcon(category)}<h3>${escapeHtml(storefrontCategoryLabel(category))}</h3><span>${items.length}</span></header>
+    <div class="storefront-grid">${items.map((item) => storefrontCard(item, storefrontComparisons[item.name])).join('')}</div>
+  </section>`).join('') : '<div class="storefront-empty storefront-empty--search"><h3>No encontramos ese producto</h3><p>Probá con otro nombre o elegí “Todos”.</p></div>';
+}
+
+function renderStorefrontShell() {
+  const body = $('#storefront-body');
+  const categoryCounts = new Map();
+  for (const item of storefrontRecommendations) categoryCounts.set(item.category, (categoryCounts.get(item.category) || 0) + 1);
+  body.innerHTML = `<div class="storefront-intro"><b>Todo lo que suelen comprar, ordenado por tipo</b><small>Recuperamos productos de las compras y la libreta de precios. Macropass muestra la fecha de la boleta.</small></div>
+    <label class="storefront-search"><span class="sr-only">Buscar en tu súper</span>${ICONS.search}<input id="storefront-search" type="search" inputmode="search" autocomplete="off" placeholder="Buscar producto…"></label>
+    <div class="storefront-filters" id="storefront-filters" aria-label="Filtrar productos por categoría">
+      <button type="button" class="is-active" data-storefront-category="all">Todos <span>${storefrontRecommendations.length}</span></button>
+      ${[...categoryCounts].map(([category, count]) => `<button type="button" data-storefront-category="${escapeHtml(category)}">${escapeHtml(storefrontCategoryLabel(category))} <span>${count}</span></button>`).join('')}
+    </div>
+    <div class="storefront-status"><b id="storefront-count"></b><small id="storefront-live-status" role="status">Mostrando tus precios guardados mientras buscamos los actuales…</small></div>
+    <div id="storefront-results"></div>`;
+  $('#storefront-search').addEventListener('input', (event) => {
+    storefrontSearch = normalize(event.target.value);
+    renderStorefrontResults();
+  });
+  $('#storefront-filters').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-storefront-category]');
+    if (!button) return;
+    storefrontCategory = button.dataset.storefrontCategory;
+    $('#storefront-filters').querySelectorAll('button').forEach((item) => item.classList.toggle('is-active', item === button));
+    renderStorefrontResults();
+  });
+  renderStorefrontResults();
 }
 
 function buildStorefrontOverlay() {
@@ -189,26 +252,35 @@ function buildStorefrontOverlay() {
 async function openStorefront(event) {
   if (!storefrontOverlay) buildStorefrontOverlay();
   storefrontReturnFocus = event?.currentTarget || null;
-  const recommendations = purchaseRecommendations(deps.getPurchases(), 8);
+  storefrontRecommendations = purchaseRecommendations(deps.getPurchases(), deps.getPrices(), 36);
+  storefrontComparisons = {};
+  storefrontCategory = 'all';
+  storefrontSearch = '';
+  const requestId = ++storefrontRequestId;
   const body = $('#storefront-body');
   storefrontOverlay.hidden = false;
   requestAnimationFrame(() => storefrontOverlay.classList.add('is-open'));
   document.body.classList.add('no-scroll');
-  if (!recommendations.length) {
+  if (!storefrontRecommendations.length) {
     body.innerHTML = '<div class="storefront-empty"><h3>Todavía estamos aprendiendo</h3><p>Cuando cargues productos desde tus boletas, aparecerán acá para volver a comprarlos y comparar precios.</p></div>';
     return;
   }
-  body.innerHTML = `<div class="storefront-intro"><b>Los productos de siempre, comparados para ustedes</b><small>El precio Macropass sale de tu última boleta. Los demás se consultan ahora.</small></div><div class="storefront-loading" role="status">${ICONS.spark}<span>Armando tu súper y buscando precios…</span></div>`;
+  renderStorefrontShell();
   try {
-    const comparisons = await deps.compareShoppingPrices(recommendations.map((item) => item.name));
-    body.innerHTML = `<div class="storefront-intro"><b>Los productos de siempre, comparados para ustedes</b><small>El precio Macropass sale de tu última boleta y muestra su fecha. Los demás se consultan ahora.</small></div><div class="storefront-grid">${recommendations.map((item) => storefrontCard(item, comparisons[item.name])).join('')}</div>`;
+    const comparisons = await deps.compareShoppingPrices(storefrontRecommendations.map((item) => item.name));
+    if (requestId !== storefrontRequestId) return;
+    storefrontComparisons = comparisons;
+    $('#storefront-live-status').textContent = 'Precios actuales consultados. Top 3 listo.';
+    renderStorefrontResults();
   } catch (error) {
+    if (requestId !== storefrontRequestId) return;
     console.warn('[tu súper]', error);
-    body.innerHTML = `<div class="storefront-intro"><b>Tus compras habituales</b><small>No pudimos consultar precios actuales. Igual podés volver a agregar estos productos.</small></div><div class="storefront-grid">${recommendations.map((item) => storefrontCard(item, null)).join('')}</div>`;
+    $('#storefront-live-status').textContent = 'No pudimos consultar precios actuales; mostramos los guardados en tus boletas.';
   }
 }
 
 function closeStorefront() {
+  storefrontRequestId += 1;
   storefrontOverlay?.classList.remove('is-open');
   document.body.classList.remove('no-scroll');
   setTimeout(() => {

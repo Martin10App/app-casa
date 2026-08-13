@@ -69,7 +69,14 @@ function itemUnitPrice(item) {
   return total > 0 ? total / quantity : 0;
 }
 
-export function purchaseRecommendations(purchases, limit = 8) {
+function entryDate(value) {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(String(value))) return String(value).slice(0, 10);
+  const date = new Date(Number(value));
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+}
+
+export function purchaseRecommendations(purchases, savedPrices = [], limit = 36) {
   const products = new Map();
   const supermarketCategories = new Set(['frutas', 'verduras', 'carnes', 'lacteos', 'bebidas', 'limpieza', 'farmacia', 'mascotas', 'despensa', 'compras']);
   const ordered = [...(purchases || [])].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
@@ -102,6 +109,30 @@ export function purchaseRecommendations(purchases, limit = 8) {
       }
       products.set(key, current);
     }
+  }
+
+  // La libreta de precios también se alimenta de las boletas. Usarla permite
+  // recuperar productos históricos aunque la compra completa no esté disponible.
+  for (const saved of savedPrices || []) {
+    const name = String(saved.name || '').trim();
+    const key = normalize(name);
+    const category = saved.category || inferShoppingCategory(name);
+    if (!key || !supermarketCategories.has(category)) continue;
+    const current = products.get(key) || { name, category, times: 0, lastDate: '', lastPrice: null, macroPrice: null };
+    for (const entry of saved.entries || []) {
+      const price = Number(entry.price);
+      const date = entryDate(entry.date);
+      const store = String(entry.store || 'Sin lugar').trim();
+      if (!(price > 0)) continue;
+      if (!current.lastPrice || date >= current.lastDate) {
+        current.lastDate = date;
+        current.lastPrice = { store, price, date, source: 'boleta', comparisonPrice: Number(entry.comparisonPrice) || null, comparisonUnit: entry.comparisonUnit || null };
+      }
+      if (/macro\s*mercado/i.test(store) && (!current.macroPrice || date >= current.macroPrice.date)) {
+        current.macroPrice = { store: 'Macromercado', price, date, source: 'boleta', card: 'Macropass', comparisonPrice: Number(entry.comparisonPrice) || null, comparisonUnit: entry.comparisonUnit || null };
+      }
+    }
+    products.set(key, current);
   }
   return [...products.values()]
     .sort((a, b) => b.times - a.times || b.lastDate.localeCompare(a.lastDate) || a.name.localeCompare(b.name, 'es'))
