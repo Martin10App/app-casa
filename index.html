@@ -173,7 +173,47 @@
         </div>
         <small>Si ya está en la lista, aumenta la cantidad.</small>
       </form>
+      <button class="super-scan" id="super-scan" type="button">
+        <span class="super-scan__icon" data-icon="barcode"></span>
+        <span><b>Escanear código de barras</b><small>Identificá el producto y compará precios actuales</small></span>
+        <span class="super-scan__arrow" aria-hidden="true">›</span>
+      </button>
       <div class="super__list" id="super-list"></div>
+    </div>
+  </section>
+
+  <!-- ================= ESCÁNER DE PRODUCTOS ================= -->
+  <section class="barcode-sheet" id="barcode-sheet" role="dialog" aria-modal="true" aria-labelledby="barcode-title" hidden>
+    <div class="barcode-sheet__scrim" data-barcode-close></div>
+    <div class="barcode-panel safe-bottom">
+      <header class="barcode-panel__head">
+        <div><span class="barcode-panel__eyebrow">Comparador en vivo</span><h2 id="barcode-title">Escanear producto</h2></div>
+        <button class="icon-btn" id="barcode-close" type="button" aria-label="Cerrar escáner"></button>
+      </header>
+
+      <div class="barcode-camera" id="barcode-camera">
+        <video id="barcode-video" muted playsinline aria-hidden="true"></video>
+        <div class="barcode-camera__frame" aria-hidden="true"></div>
+        <div class="barcode-camera__hint" id="barcode-camera-hint">Alineá las barras dentro del recuadro</div>
+      </div>
+
+      <div class="barcode-actions">
+        <button class="btn btn--ghost" id="barcode-photo" type="button"><span data-icon="image"></span> Elegir foto</button>
+        <input id="barcode-file" type="file" accept="image/*" hidden>
+      </div>
+
+      <p class="barcode-status" id="barcode-status" role="status" aria-live="polite">Preparando la cámara…</p>
+      <div class="barcode-result" id="barcode-result" hidden></div>
+
+      <form class="barcode-manual" id="barcode-manual">
+        <label for="barcode-input">O escribí los números del código</label>
+        <div class="barcode-manual__row">
+          <input id="barcode-input" type="text" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="Ej. 773…" aria-describedby="barcode-help barcode-error">
+          <button class="btn btn--primary" id="barcode-search" type="submit">Buscar</button>
+        </div>
+        <small id="barcode-help">Acepta EAN-8, UPC-A, EAN-13 y GTIN-14.</small>
+        <small class="barcode-error" id="barcode-error" role="alert"></small>
+      </form>
     </div>
   </section>
 
