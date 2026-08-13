@@ -8,11 +8,15 @@ import {
   billingCycleFor,
   shiftBillingCycle,
   analyzeExpenses,
+  normalizeExpenseBudget,
+  expenseBudgetStatus,
 } from '../utils/expenses.mjs';
 
 let deps;
 let cycle = billingCycleFor();
 let manualOverlay;
+let budgetOverlay;
+let budgetReturnFocus;
 
 const monthFmt = new Intl.DateTimeFormat('es-UY', { day: 'numeric', month: 'short' });
 const numberFmt = new Intl.NumberFormat('es-UY', { maximumFractionDigits: 2 });
@@ -21,6 +25,12 @@ function dateAtNoon(iso) { return new Date(`${iso}T12:00:00`); }
 function cycleLabel(value) { return `${monthFmt.format(dateAtNoon(value.start))} – ${monthFmt.format(dateAtNoon(value.end))}`; }
 function categoryLabel(key) { return EXPENSE_CATEGORIES[key] || 'Otros'; }
 function paymentLabel(key) { return PAYMENT_METHODS[key]?.short || PAYMENT_METHODS.unknown.short; }
+
+function budgetMessage(status) {
+  if (status.key === 'green') return `Te quedan ${fmtMoney(status.remaining)} antes de entrar en amarillo.`;
+  if (status.key === 'yellow') return `Te quedan ${fmtMoney(status.remaining)} antes de llegar al límite.`;
+  return `Te pasaste ${fmtMoney(status.over)} del límite definido.`;
+}
 
 function breakdown(title, rows, labelFor, total, emptyText) {
   if (!rows.length) return `<section class="expense-breakdown"><h4>${title}</h4><p class="expense-empty">${emptyText}</p></section>`;
@@ -45,6 +55,8 @@ export function renderExpenseDashboard() {
   const nextDisabled = cycle.start >= current.start;
   const master = report.payments.find((row) => row.key === 'master_brou')?.total || 0;
   const outsideCredit = report.total - master;
+  const budgetStatus = expenseBudgetStatus(report.total, deps.getBudget?.());
+  const budget = budgetStatus.budget;
 
   host.innerHTML = `
     <section class="expense-summary">
@@ -58,6 +70,18 @@ export function renderExpenseDashboard() {
         <div class="expense-payment-card expense-payment-card--master"><span>Master BROU</span><b>${fmtMoney(master)}</b><small>cierre 23</small></div>
         <div class="expense-payment-card"><span>Otros medios</span><b>${fmtMoney(outsideCredit)}</b><small>débito, efectivo y más</small></div>
       </div>
+    </section>
+    <section class="expense-budget expense-budget--${budgetStatus.key}" aria-labelledby="expense-budget-title">
+      <div class="expense-budget__head">
+        <div>
+          <small>Semáforo del período</small>
+          <h3 id="expense-budget-title">${budgetStatus.label}</h3>
+        </div>
+        <button class="expense-budget__edit" id="expense-budget-edit" type="button">${ICONS.edit}<span>Cambiar límites</span></button>
+      </div>
+      <div class="expense-budget__track" role="progressbar" aria-label="Gasto del período respecto al límite" aria-valuemin="0" aria-valuemax="${budget.limit}" aria-valuenow="${Math.min(report.total, budget.limit)}"><span style="width:${budgetStatus.progress}%"></span></div>
+      <div class="expense-budget__marks"><span>Ideal ${fmtMoney(budget.ideal)}</span><span>Límite ${fmtMoney(budget.limit)}</span></div>
+      <p>${budgetMessage(budgetStatus)}</p>
     </section>
     <details class="expense-analysis" ${report.movements.length ? 'open' : ''}>
       <summary>Ver análisis del período</summary>
@@ -74,6 +98,78 @@ export function renderExpenseDashboard() {
 
   $('#expense-prev').addEventListener('click', () => { cycle = shiftBillingCycle(cycle, -1); deps.render(); });
   $('#expense-next').addEventListener('click', () => { if (!nextDisabled) { cycle = shiftBillingCycle(cycle, 1); deps.render(); } });
+  $('#expense-budget-edit').addEventListener('click', openBudgetSettings);
+}
+
+function buildBudgetOverlay() {
+  budgetOverlay = document.createElement('div');
+  budgetOverlay.className = 'modal-overlay';
+  budgetOverlay.id = 'expense-budget-overlay';
+  budgetOverlay.innerHTML = `<form class="modal expense-budget-modal" id="expense-budget-form" role="dialog" aria-modal="true" aria-labelledby="expense-budget-modal-title">
+    <div class="modal__handle"></div>
+    <header class="modal__header"><h2 class="modal__title" id="expense-budget-modal-title">Límites de gastos</h2><button type="button" class="icon-btn" id="expense-budget-close" aria-label="Cerrar">${ICONS.close}</button></header>
+    <div class="modal__body">
+      <p class="expense-budget-help">Se aplican a cada período de la tarjeta, del 24 al 23.</p>
+      <label class="field"><span class="field__label">Gasto ideal</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="expense-budget-ideal" type="number" min="1" step="100" inputmode="decimal" required></span></label>
+      <label class="field"><span class="field__label">Límite máximo</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="expense-budget-limit" type="number" min="1" step="100" inputmode="decimal" required></span></label>
+      <div class="expense-budget-legend" aria-label="Cómo funciona el semáforo"><span><i class="is-green"></i>Verde hasta el ideal</span><span><i class="is-yellow"></i>Amarillo hasta el límite</span><span><i class="is-red"></i>Rojo al superarlo</span></div>
+      <p class="expense-budget-error" id="expense-budget-error" role="alert"></p>
+    </div>
+    <footer class="modal__footer"><button type="button" class="btn btn--ghost" id="expense-budget-cancel">Cancelar</button><button class="btn btn--primary" id="expense-budget-save">Guardar límites</button></footer>
+  </form>`;
+  document.body.appendChild(budgetOverlay);
+  $('#expense-budget-close').addEventListener('click', closeBudgetSettings);
+  $('#expense-budget-cancel').addEventListener('click', closeBudgetSettings);
+  budgetOverlay.addEventListener('click', (event) => { if (event.target === budgetOverlay) closeBudgetSettings(); });
+  $('#expense-budget-form').addEventListener('submit', saveBudgetSettings);
+}
+
+function openBudgetSettings(event) {
+  if (!budgetOverlay) buildBudgetOverlay();
+  budgetReturnFocus = event?.currentTarget || null;
+  const budget = normalizeExpenseBudget(deps.getBudget?.());
+  $('#expense-budget-ideal').value = budget.ideal;
+  $('#expense-budget-limit').value = budget.limit;
+  $('#expense-budget-error').textContent = '';
+  budgetOverlay.hidden = false;
+  requestAnimationFrame(() => budgetOverlay.classList.add('is-open'));
+  document.body.classList.add('no-scroll');
+  setTimeout(() => $('#expense-budget-ideal').focus(), 250);
+}
+
+function closeBudgetSettings() {
+  budgetOverlay?.classList.remove('is-open');
+  document.body.classList.remove('no-scroll');
+  setTimeout(() => {
+    if (budgetOverlay) budgetOverlay.hidden = true;
+    budgetReturnFocus?.focus();
+  }, 250);
+}
+
+async function saveBudgetSettings(event) {
+  event.preventDefault();
+  const ideal = Number($('#expense-budget-ideal').value);
+  const limit = Number($('#expense-budget-limit').value);
+  const error = $('#expense-budget-error');
+  if (!(ideal > 0) || !(limit > ideal)) {
+    error.textContent = 'El límite máximo debe ser mayor que el gasto ideal.';
+    return;
+  }
+  const button = $('#expense-budget-save');
+  button.disabled = true;
+  button.textContent = 'Guardando…';
+  error.textContent = '';
+  try {
+    await deps.saveBudget(normalizeExpenseBudget({ ideal, limit }));
+    toast('Límites de gastos actualizados', { emoji: '🚦', type: 'success' });
+    closeBudgetSettings();
+  } catch (saveError) {
+    console.error('[límites de gastos]', saveError);
+    error.textContent = 'No se pudieron guardar los límites. Probá de nuevo.';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Guardar límites';
+  }
 }
 
 function buildManualOverlay() {

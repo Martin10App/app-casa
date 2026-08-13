@@ -84,6 +84,29 @@ test('card cycles run from day 24 through day 23 and reports stay separated', as
   assert.equal(report.products[0].unit, 'kg');
 });
 
+test('expense traffic light respects editable ideal and maximum limits', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  assert.deepEqual(expenses.normalizeExpenseBudget(), { ideal: 30000, limit: 35000 });
+  assert.deepEqual(expenses.normalizeExpenseBudget({ ideal: -1, limit: 0 }), { ideal: 30000, limit: 35000 });
+  assert.equal(expenses.expenseBudgetStatus(30000, { ideal: 30000, limit: 35000 }).key, 'green');
+  assert.equal(expenses.expenseBudgetStatus(30000.01, { ideal: 30000, limit: 35000 }).key, 'yellow');
+  assert.equal(expenses.expenseBudgetStatus(35000, { ideal: 30000, limit: 35000 }).key, 'yellow');
+  const exceeded = expenses.expenseBudgetStatus(35500, { ideal: 30000, limit: 35000 });
+  assert.equal(exceeded.key, 'red');
+  assert.equal(exceeded.over, 500);
+});
+
+test('expense traffic light explains its state without relying only on color', () => {
+  const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'expenses.js'), 'utf8');
+  const logic = fs.readFileSync(path.join(__dirname, '..', 'utils', 'expenses.mjs'), 'utf8');
+  assert.match(logic, /En objetivo/);
+  assert.match(logic, /Atención/);
+  assert.match(logic, /Límite superado/);
+  assert.match(component, /budgetStatus\.label/);
+  assert.match(component, /Cambiar límites/);
+  assert.match(component, /del 24 al 23/);
+});
+
 test('ANCAP and its Bregu SRL receipt name are one merchant', async () => {
   const expenses = await import('../utils/expenses.mjs');
   const report = expenses.analyzeExpenses([

@@ -863,6 +863,7 @@ function startApp() {
   subscribeHome((home) => {
     state.home = { cards: {}, ...home };
     if (state.view === 'home') renderHome();
+    if (state.view === 'compras') renderCompras();
   });
 
   subscribeInventory((inv) => {
@@ -1036,6 +1037,12 @@ async function boot() {
   initExpenses({
     getMe: () => state.me,
     getPurchases: () => state.compras,
+    getBudget: () => state.home.expenseBudget,
+    saveBudget: async (expenseBudget) => {
+      state.home = { ...state.home, expenseBudget };
+      await saveHome({ expenseBudget });
+      renderCompras();
+    },
     saveReceiptBundle,
     render: renderCompras,
   });
