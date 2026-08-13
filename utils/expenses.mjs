@@ -20,6 +20,32 @@ export const EXPENSE_CATEGORIES = {
   otros: 'Otros',
 };
 
+export const DEFAULT_EXPENSE_BUDGET = Object.freeze({ ideal: 30000, limit: 35000 });
+
+export function normalizeExpenseBudget(value = {}) {
+  const ideal = Number(value?.ideal);
+  const limit = Number(value?.limit);
+  if (!(ideal > 0) || !(limit > ideal)) return { ...DEFAULT_EXPENSE_BUDGET };
+  return {
+    ideal: Math.round(ideal * 100) / 100,
+    limit: Math.round(limit * 100) / 100,
+  };
+}
+
+export function expenseBudgetStatus(total, value) {
+  const amount = Math.max(0, Number(total) || 0);
+  const budget = normalizeExpenseBudget(value);
+  const progress = Math.min(100, amount / budget.limit * 100);
+
+  if (amount <= budget.ideal) {
+    return { key: 'green', label: 'En objetivo', amount, budget, progress, remaining: budget.ideal - amount };
+  }
+  if (amount <= budget.limit) {
+    return { key: 'yellow', label: 'Atención', amount, budget, progress, remaining: budget.limit - amount };
+  }
+  return { key: 'red', label: 'Límite superado', amount, budget, progress: 100, over: amount - budget.limit };
+}
+
 // Martín confirmó que todas las compras históricas, anteriores al selector
 // de forma de pago, fueron hechas con la Master BROU Recompensa.
 export function paymentMethodFor(purchase) {
