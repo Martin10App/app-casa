@@ -154,17 +154,20 @@ async function createCloudAdapter() {
         memberUids: [user.uid],
         ownerUid: user.uid,
         inviteId: inviteRef.id,
+        ...(draft.priceArea ? { priceArea: draft.priceArea } : {}),
         createdAt: fs.serverTimestamp(),
       });
       batch.set(fs.doc(homeRef, 'meta', 'users'), profiles);
-      batch.set(fs.doc(homeRef, 'meta', 'home'), { cardLabels: { alma: draft.childName } });
+      batch.set(fs.doc(homeRef, 'meta', 'home'), { cardLabels: { alma: draft.childName }, expenseBudget: draft.expenseBudget });
+      if (draft.childPhoto) batch.set(fs.doc(homeRef, 'homeCards', 'alma'), { photo: draft.childPhoto, updatedAt: fs.serverTimestamp() });
       batch.set(fs.doc(db, 'accounts', user.uid), { householdId: homeRef.id, profileId: user.uid });
       batch.set(inviteRef, {
         householdId: homeRef.id, householdName: draft.name, partnerProfile: draft.profiles.partner,
+        ...(draft.priceArea ? { priceArea: draft.priceArea } : {}),
         createdBy: user.uid, active: true, createdAt: fs.serverTimestamp(),
       });
       await batch.commit();
-      return { id: homeRef.id, profileId: user.uid, legacy: false, name: draft.name, inviteId: inviteRef.id, memberUids: [user.uid] };
+      return { id: homeRef.id, profileId: user.uid, legacy: false, name: draft.name, inviteId: inviteRef.id, memberUids: [user.uid], priceArea: draft.priceArea };
     },
 
     async joinHousehold(inviteId, user) {
@@ -176,16 +179,18 @@ async function createCloudAdapter() {
       const homeRef = fs.doc(db, 'households', householdId);
       const usersRef = fs.doc(homeRef, 'meta', 'users');
       const pending = inviteData.partnerProfile || { name: user.name || 'Mi pareja', emoji: '👤', bg: '#ffe3dc' };
+      const joinedProfile = { ...pending, pending: false, uid: user.uid, email: user.email || '' };
+      if (!joinedProfile.photo && user.photo) joinedProfile.photo = user.photo;
       const batch = fs.writeBatch(db);
       batch.update(homeRef, { memberUids: fs.arrayUnion(user.uid) });
       batch.set(usersRef, {
         partner: fs.deleteField(),
-        [user.uid]: { ...pending, pending: false, uid: user.uid, email: user.email || '' },
+        [user.uid]: joinedProfile,
       }, { merge: true });
       batch.set(fs.doc(db, 'accounts', user.uid), { householdId, profileId: user.uid });
       batch.update(inviteRef, { active: false, usedBy: user.uid, usedAt: fs.serverTimestamp() });
       await batch.commit();
-      return { id: householdId, profileId: user.uid, legacy: false, name: inviteData.householdName || 'Nuestro Hogar', memberUids: [inviteData.createdBy, user.uid] };
+      return { id: householdId, profileId: user.uid, legacy: false, name: inviteData.householdName || 'Nuestro Hogar', memberUids: [inviteData.createdBy, user.uid], priceArea: inviteData.priceArea || null };
     },
 
     subscribeItems(cb) {

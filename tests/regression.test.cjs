@@ -100,6 +100,35 @@ test('households keep legacy data stable and customize each child card independe
   });
   assert.deepEqual(cards.map((card) => card.label), ['Julieta', 'Gastos']);
   assert.equal(households.cardsForHousehold([{ id: 'alma', label: 'Alma' }], {})[0].label, 'Alma');
+  const photo = 'data:image/jpeg;base64,AA==';
+  const draft = households.householdDraft({
+    name: 'Casa de Sofía y Diego', myName: 'Sofía', partnerName: 'Diego', childName: 'Julieta',
+    myPhoto: photo, partnerPhoto: photo, childPhoto: photo,
+    expenseIdeal: 42000, expenseLimit: 50000,
+    priceArea: { name: 'Atlántida', lat: -34.771234, lon: -55.758456 },
+  });
+  assert.deepEqual(draft.expenseBudget, { ideal: 42000, limit: 50000 });
+  assert.deepEqual(draft.priceArea, { name: 'Atlántida', lat: -34.771, lon: -55.758 });
+  assert.equal(draft.profiles.owner.photo, photo);
+  assert.equal(draft.profiles.partner.photo, photo);
+  assert.equal(draft.childPhoto, photo);
+});
+
+test('new-home onboarding collects family photos, location and expense goals in accessible steps', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  assert.equal((html.match(/data-setup-step=/g) || []).length, 4);
+  assert.match(html, /data-setup-photo="owner"/);
+  assert.match(html, /data-setup-photo="partner"/);
+  assert.match(html, /data-setup-photo="child"/);
+  assert.match(html, /id="household-budget-ideal"/);
+  assert.match(html, /id="household-budget-limit"/);
+  assert.match(html, /id="household-location"/);
+  assert.match(app, /compressImage\(file, 360, 0\.74\)/);
+  assert.match(app, /HOUSEHOLD_SETUP_STEPS = 4/);
+  assert.match(css, /min-height: 44px/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
 });
 
 test('cloud storage uses household subcollections while preserving the legacy root collections', () => {
@@ -107,6 +136,8 @@ test('cloud storage uses household subcollections while preserving the legacy ro
   const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
   assert.match(source, /context\?\.legacy \? null : \['households', context\.id\]/);
   assert.match(source, /configureHousehold\(\{ id: 'martin-lucia', legacy: true \}\)/);
+  assert.match(source, /expenseBudget: draft\.expenseBudget/);
+  assert.match(source, /homeCards', 'alma'/);
   assert.match(rules, /householdMemberAfter/);
   assert.match(rules, /legacyMember/);
   assert.match(rules, /request\.auth\.uid in get/);

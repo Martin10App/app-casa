@@ -877,6 +877,10 @@ function showAuthGate(mode, email = '') {
 
 let pendingAuthUser = null;
 let resolvingSession = false;
+let householdSetupStep = 1;
+let householdSetupPhotos = { owner: '', partner: '', child: '' };
+let householdSetupLocation = null;
+const HOUSEHOLD_SETUP_STEPS = 4;
 
 function inviteUrl(inviteId) {
   const url = new URL(location.href);
@@ -888,14 +892,99 @@ function inviteUrl(inviteId) {
 
 function enterHousehold(context) {
   state.household = context;
-  state.userLoc = null;
-  state.areaName = context.legacy ? 'Las Piedras' : 'tu zona';
+  state.userLoc = context.priceArea ? { lat: context.priceArea.lat, lon: context.priceArea.lon } : null;
+  state.areaName = context.legacy ? 'Las Piedras' : (context.priceArea?.name || 'tu zona');
   state.me = context.profileId;
   localStorage.setItem('nh_me', state.me);
   configureHousehold(context);
   $('#auth-overlay').hidden = true;
   $('#household-overlay').hidden = true;
   startApp();
+}
+
+function setupPhotoPreview(kind, source = '') {
+  const preview = $(`[data-photo-preview="${kind}"]`);
+  if (!preview) return;
+  preview.textContent = '';
+  if (source) {
+    const image = document.createElement('img');
+    image.src = source;
+    image.alt = '';
+    preview.appendChild(image);
+  } else {
+    preview.textContent = kind === 'child' ? '👧' : '👤';
+  }
+}
+
+function clearHouseholdError() {
+  const error = $('#household-error');
+  error.textContent = '';
+  error.hidden = true;
+}
+
+function updateHouseholdReview() {
+  $('#household-review-home').textContent = $('#household-name').value.trim() || '—';
+  $('#household-review-people').textContent = [$('#household-me').value.trim(), $('#household-partner').value.trim()].filter(Boolean).join(' y ') || '—';
+  $('#household-review-child').textContent = $('#household-child').value.trim() || '—';
+  $('#household-review-area').textContent = householdSetupLocation?.name || 'Se activará más adelante';
+  const ideal = Number($('#household-budget-ideal').value);
+  const limit = Number($('#household-budget-limit').value);
+  $('#household-review-budget').textContent = ideal > 0 && limit > ideal
+    ? `Ideal ${fmtMoney(ideal)} · máximo ${fmtMoney(limit)}` : '—';
+}
+
+function showHouseholdStep(step) {
+  householdSetupStep = Math.max(1, Math.min(HOUSEHOLD_SETUP_STEPS, step));
+  $$('[data-setup-step]').forEach((section) => { section.hidden = Number(section.dataset.setupStep) !== householdSetupStep; });
+  $$('[data-setup-dot]').forEach((dot) => dot.classList.toggle('is-active', Number(dot.dataset.setupDot) <= householdSetupStep));
+  $('#household-back').hidden = householdSetupStep === 1;
+  $('#household-next').hidden = householdSetupStep === HOUSEHOLD_SETUP_STEPS;
+  $('#household-create').hidden = householdSetupStep !== HOUSEHOLD_SETUP_STEPS;
+  if (householdSetupStep === HOUSEHOLD_SETUP_STEPS) updateHouseholdReview();
+  clearHouseholdError();
+  const heading = $(`[data-setup-step="${householdSetupStep}"] h3`);
+  heading?.setAttribute('tabindex', '-1');
+  requestAnimationFrame(() => heading?.focus?.({ preventScroll: true }));
+}
+
+function validateHouseholdStep(step) {
+  const required = step === 1
+    ? [$('#household-name'), $('#household-child')]
+    : step === 2 ? [$('#household-me'), $('#household-partner')] : [];
+  const empty = required.find((input) => !input.value.trim());
+  if (empty) {
+    householdError('Completá los datos marcados antes de continuar.');
+    empty.focus();
+    return false;
+  }
+  if (step === 3) {
+    const ideal = Number($('#household-budget-ideal').value);
+    const limit = Number($('#household-budget-limit').value);
+    if (!(ideal > 0) || !(limit > ideal)) {
+      householdError('El límite máximo debe ser mayor que el gasto ideal.');
+      (!(ideal > 0) ? $('#household-budget-ideal') : $('#household-budget-limit')).focus();
+      return false;
+    }
+  }
+  clearHouseholdError();
+  return true;
+}
+
+function resetHouseholdSetup(user) {
+  householdSetupPhotos = { owner: user.photo || '', partner: '', child: '' };
+  householdSetupLocation = null;
+  $('#household-me').value = user.name || '';
+  $('#household-partner').value = '';
+  $('#household-child').value = '';
+  $('#household-name').value = user.name ? `Hogar de ${user.name.split(' ')[0]}` : '';
+  $('#household-budget-ideal').value = '30000';
+  $('#household-budget-limit').value = '35000';
+  $('#household-location-status').textContent = 'Podés activarla ahora o hacerlo más adelante.';
+  $('#household-location').textContent = 'Usar mi ubicación';
+  $('#household-location').disabled = false;
+  $('#household-child-preview').textContent = 'la tarjeta infantil';
+  Object.entries(householdSetupPhotos).forEach(([kind, source]) => setupPhotoPreview(kind, source));
+  showHouseholdStep(1);
 }
 
 function showHouseholdSetup(user) {
@@ -910,9 +999,8 @@ function showHouseholdSetup(user) {
   $('#household-sub').textContent = joining
     ? 'La invitación conecta a la pareja, pero mantiene esta casa separada de todas las demás.'
     : 'Sus gastos, compras, boletas y perfiles quedarán en una casa independiente.';
-  $('#household-me').value = user.name || '';
-  $('#household-name').value = user.name ? `Hogar de ${user.name.split(' ')[0]}` : '';
-  $('#household-error').hidden = true;
+  if (!joining) resetHouseholdSetup(user);
+  clearHouseholdError();
 }
 
 function householdError(message) {
@@ -1049,8 +1137,12 @@ async function boot() {
   // Capa de datos (nube o local)
   await initData();
 
+  // Vista local segura para revisar el alta sin escribir datos reales.
+  const onboardingPreview = ['localhost', '127.0.0.1'].includes(location.hostname)
+    && new URLSearchParams(location.search).get('preview') === 'onboarding';
+
   // Login: en modo nube exigimos cuenta de Google autorizada; en local se entra directo
-  if (authEnabled()) {
+  if (authEnabled() || onboardingPreview) {
     $('#auth-g-icon').innerHTML = ICONS.google;
     $('#auth-google').addEventListener('click', async () => {
       const btn = $('#auth-google');
@@ -1063,21 +1155,93 @@ async function boot() {
     });
     $('#auth-signout').addEventListener('click', () => signOutUser());
     $('#household-signout').addEventListener('click', () => signOutUser());
+    $('#household-next').addEventListener('click', () => {
+      if (validateHouseholdStep(householdSetupStep)) showHouseholdStep(householdSetupStep + 1);
+    });
+    $('#household-back').addEventListener('click', () => showHouseholdStep(householdSetupStep - 1));
+    $('#household-child').addEventListener('input', () => {
+      $('#household-child-preview').textContent = $('#household-child').value.trim() || 'la tarjeta infantil';
+    });
+    $$('[data-setup-photo]').forEach((button) => button.addEventListener('click', () => {
+      $(`#household-photo-${button.dataset.setupPhoto}`).click();
+    }));
+    for (const kind of ['owner', 'partner', 'child']) {
+      $(`#household-photo-${kind}`).addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const button = $(`[data-setup-photo="${kind}"]`);
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        clearHouseholdError();
+        try {
+          const photo = await compressImage(file, 360, 0.74);
+          householdSetupPhotos[kind] = photo;
+          setupPhotoPreview(kind, photo);
+        } catch (error) {
+          console.warn('[Foto configuración]', error);
+          householdError('No pudimos procesar esa foto. Probá con otra imagen.');
+        } finally {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          event.target.value = '';
+        }
+      });
+    }
+    $('#household-location').addEventListener('click', async () => {
+      const button = $('#household-location');
+      button.disabled = true;
+      button.textContent = 'Buscando…';
+      clearHouseholdError();
+      try {
+        state.supers = await loadSupers();
+        const locationValue = await getLocation();
+        const area = nearestArea(locationValue.lat, locationValue.lon, state.supers);
+        householdSetupLocation = { ...locationValue, name: area?.name || 'tu zona' };
+        $('#household-location-status').textContent = `${householdSetupLocation.name} · se compartirá como zona aproximada del hogar.`;
+        button.textContent = 'Ubicación lista ✓';
+      } catch (error) {
+        console.warn('[Ubicación configuración]', error);
+        $('#household-location-status').textContent = 'No se pudo activar. Podrán hacerlo después desde la app.';
+        button.textContent = 'Reintentar ubicación';
+      } finally {
+        button.disabled = false;
+      }
+    });
     $('#household-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!pendingAuthUser) return;
+      if (householdSetupStep < HOUSEHOLD_SETUP_STEPS) {
+        if (validateHouseholdStep(householdSetupStep)) showHouseholdStep(householdSetupStep + 1);
+        return;
+      }
+      for (const step of [1, 2, 3]) {
+        if (!validateHouseholdStep(step)) {
+          showHouseholdStep(step);
+          validateHouseholdStep(step);
+          return;
+        }
+      }
       const button = $('#household-create');
       button.disabled = true;
       button.textContent = 'Creando hogar…';
-      $('#household-error').hidden = true;
+      clearHouseholdError();
       try {
         const draft = householdDraft({
           name: $('#household-name').value,
           myName: $('#household-me').value,
           partnerName: $('#household-partner').value,
           childName: $('#household-child').value,
+          myPhoto: householdSetupPhotos.owner,
+          partnerPhoto: householdSetupPhotos.partner,
+          childPhoto: householdSetupPhotos.child,
+          expenseIdeal: $('#household-budget-ideal').value,
+          expenseLimit: $('#household-budget-limit').value,
+          priceArea: householdSetupLocation,
         }, pendingAuthUser);
         const context = await createHousehold(draft, pendingAuthUser);
+        if (householdSetupLocation) {
+          localStorage.setItem(`nh_loc_${context.id}`, JSON.stringify({ lat: householdSetupLocation.lat, lon: householdSetupLocation.lon }));
+        }
         enterHousehold(context);
         const link = inviteUrl(context.inviteId);
         try { await navigator.clipboard.writeText(link); } catch { /* se puede compartir desde ajustes */ }
@@ -1110,6 +1274,11 @@ async function boot() {
       try { await navigator.clipboard.writeText(location.href); toast('Enlace copiado ✓ Pegalo en Safari', { emoji: '📋', type: 'success' }); }
       catch { toast('Copiá el enlace desde la barra de arriba', { emoji: '📋' }); }
     });
+
+    if (onboardingPreview) {
+      showHouseholdSetup({ uid: 'preview', email: 'preview@example.com', name: 'Sofía', photo: '' });
+      return;
+    }
 
     // Dentro de WhatsApp/Instagram el login no funciona → guiamos a abrir en el navegador
     if (isInAppBrowser()) { showInAppBrowserHelp(); return; }
