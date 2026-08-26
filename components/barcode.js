@@ -82,6 +82,7 @@ function renderResult(data) {
   const image = safeUrl(product.image);
   const exact = data.exactResults || [];
   const comparable = (data.comparableResults || []).filter((row) => !exact.some((item) => String(item.store).toLowerCase() === String(row.store).toLowerCase()));
+  const area = deps.getAreaName?.() || 'tu zona';
   result.innerHTML = `
     <div class="barcode-product">
       <div class="barcode-product__image">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.name)}">` : ICONS.barcode}</div>
@@ -89,8 +90,8 @@ function renderResult(data) {
     </div>
     ${priceRows(exact, 'exact')}
     ${priceRows(comparable, 'comparable')}
-    ${!exact.length && !comparable.length ? '<p class="barcode-no-prices">Reconocimos el producto, pero no encontramos un precio actual en Las Piedras.</p>' : ''}
-    <p class="barcode-note">“Mismo código” es el producto idéntico. “Comparable” puede variar en marca o presentación: revisalo antes de comprar.</p>
+    ${!exact.length && !comparable.length ? `<p class="barcode-no-prices">Reconocimos el producto, pero no encontramos un precio actual y equivalente en ${escapeHtml(area)}.</p>` : ''}
+    <p class="barcode-note">“Mismo código” es el producto idéntico. “Comparable” mantiene el mismo tipo de producto y la misma cantidad.</p>
     <button class="btn btn--primary barcode-add" id="barcode-add" type="button">${ICONS.plus} Agregar a la lista</button>`;
   result.hidden = false;
   setStatus(exact.length ? `Encontrado en ${exact.length} comercio${exact.length === 1 ? '' : 's'} por código` : 'Producto reconocido; mostrando opciones comparables', 'success');

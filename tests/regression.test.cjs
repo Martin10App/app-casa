@@ -15,9 +15,11 @@ test('Uruguay keeps the local calendar date after UTC midnight', () => {
 test('package prices are normalized per kilogram and litre', () => {
   assert.deepEqual(presentation('arroz 500 g', 60), {
     sizeLabel: '500 g', comparisonUnit: 'kg', comparisonPrice: 120, packageQuantity: 0.5,
+    packageCount: 1, itemQuantity: 0.5,
   });
   assert.deepEqual(presentation('leche 1,5 L', 90), {
     sizeLabel: '1,5 l', comparisonUnit: 'l', comparisonPrice: 60, packageQuantity: 1.5,
+    packageCount: 1, itemQuantity: 1.5,
   });
   assert.equal(presentation('Arroz oficial · 1.0 Kilogramos', 30).comparisonPrice, 30);
   assert.equal(presentation('Aceite oficial · 900.0 Mililitros', 90).comparisonPrice, 100);
@@ -30,6 +32,63 @@ test('API authorization accepts only verified household accounts', () => {
   assert.throws(() => validateClaims({ ...base, email: 'intruso@example.com' }, now), /forbidden/);
   assert.equal(extractBearer({ headers: { authorization: 'Bearer token-value' } }), 'token-value');
   assert.equal(validateVerifiedClaims({ ...base, email: 'hermana@example.com' }, now).email, 'hermana@example.com');
+});
+
+test('price matching requires the same package size and understands multipacks', () => {
+  const { presentation, samePresentation } = require('../api/_presentation');
+  assert.deepEqual(presentation('Leche pack 6 x 1 L', 540), {
+    sizeLabel: '6 x 1 l', comparisonUnit: 'l', comparisonPrice: 90, packageQuantity: 6,
+    packageCount: 6, itemQuantity: 1,
+  });
+  assert.equal(samePresentation('Leche entera 1 L', 'Leche entera 1000 ml'), true);
+  assert.equal(samePresentation('Leche entera 1 L', 'Leche entera 500 ml'), false);
+  assert.equal(samePresentation('Arroz 1 kg', 'Arroz 500 g'), false);
+  assert.equal(samePresentation('Leche 6 x 1 L', 'Leche 3 x 2 L'), false);
+  assert.equal(samePresentation('Papel higiénico 8 unidades', 'Papel higiénico 4 unidades'), false);
+  assert.equal(samePresentation('Leche', 'Leche entera 500 ml'), null);
+});
+
+test('saved receipt prices only compare equivalent presentations', async () => {
+  const { comparableSavedPresentation, packageQuantityFromLabel } = await import('../utils/shopping.mjs');
+  assert.equal(packageQuantityFromLabel('6 x 1 L', 'l'), 6);
+  assert.equal(packageQuantityFromLabel('500 ml', 'l'), 0.5);
+  assert.equal(comparableSavedPresentation(
+    { price: 90, comparisonPrice: 90, comparisonUnit: 'l' },
+    { price: 52, comparisonPrice: 104, comparisonUnit: 'l' },
+  ), false);
+  assert.equal(comparableSavedPresentation(
+    { price: 90, comparisonPrice: 90, comparisonUnit: 'l' },
+    { price: 95, comparisonPrice: 95, comparisonUnit: 'l' },
+  ), true);
+  const unknown = { price: 90 };
+  assert.equal(comparableSavedPresentation(unknown, unknown), true);
+  assert.equal(comparableSavedPresentation(unknown, { price: 80 }), false);
+});
+
+test('official price search builds its area from the household location', () => {
+  const { boundsForLocation, areaCacheKey } = require('../api/precios-online')._test;
+  const atlantida = boundsForLocation({ lat: -34.771, lon: -55.758 });
+  assert.ok(atlantida.v1 < -55.758 && atlantida.v3 > -55.758);
+  assert.ok(atlantida.v2 < -34.771 && atlantida.v4 > -34.771);
+  assert.notEqual(areaCacheKey('leche', { lat: -34.771, lon: -55.758 }), areaCacheKey('leche', { lat: -34.73, lon: -56.22 }));
+});
+
+test('live search refuses to guess when the requested package size is unknown', async () => {
+  const { pricesForTerm } = require('../api/precios-online')._test;
+  assert.deepEqual(await pricesForTerm('leche', { lat: -34.771, lon: -55.758 }), []);
+});
+
+test('new households keep their own location and resolve Atlantida locally', async () => {
+  const { nearestArea } = await import('../utils/supers.js');
+  const area = nearestArea(-34.771, -55.758, [
+    { ci: 'Las Piedras', lat: -34.73, lon: -56.22 },
+    { ci: 'Atlántida', lat: -34.7705, lon: -55.7575 },
+  ]);
+  assert.equal(area.name, 'Atlántida');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.match(app, /`nh_loc_\$\{state\.household\.id\}`/);
+  assert.match(app, /location: comparisonLocation\(\)/);
+  assert.match(app, /row\.km == null \|\| row\.km <= RADIO_KM/);
 });
 
 test('households keep legacy data stable and customize each child card independently', async () => {
@@ -222,6 +281,10 @@ test('live price matching rejects unrelated products and prefers exact grocery n
   assert.ok(relevance('Leche entera Conaprole 1 L', 'leche entera') > relevance('Dulce de leche Conaprole 1 kg', 'leche entera'));
   assert.ok(relevance('Dulce de leche Conaprole 1 kg', 'leche') < 0);
   assert.equal(relevance('Papel higiénico 8 unidades', 'pollo'), 0);
+  assert.ok(relevance('Fideos secos 500 g', { name: 'Fideo seco', sizeLabel: '500 g' }) > 0);
+  assert.ok(relevance('Leche condensada 1 L', { name: 'Leche', sizeLabel: '1 L' }) < 0);
+  assert.ok(relevance('Leche entera Conaprole 1000 ml', { name: 'Leche entera Conaprole', sizeLabel: '1 L' }) > 0);
+  assert.equal(relevance('Leche entera Conaprole 500 ml', { name: 'Leche entera Conaprole', sizeLabel: '1 L' }), 0);
   assert.equal(officialStoreName('Macromercado- Suc. Las Piedras N°16'), 'Macromercado');
   assert.deepEqual(bestOfficialArticles([
     { id: 1, name: 'Arroz Blanco - Aruba' },
@@ -264,8 +327,8 @@ test('supermarket mode loads live prices in batches and keeps a receipt fallback
   const component = fs.readFileSync(path.join(__dirname, '..', 'components', 'supermarket.js'), 'utf8');
   assert.match(app, /compareShoppingPrices/);
   assert.match(app, /unique\.slice\(start, start \+ 6\)/);
-  assert.match(component, /Precios reales de Las Piedras/);
-  assert.match(component, /La app seguirá usando tus boletas/);
+  assert.match(component, /Precios reales de.*getAreaName/);
+  assert.match(component, /la app seguirá usando tus boletas/i);
   assert.match(component, /data-action="price-details"/);
 });
 
@@ -299,6 +362,7 @@ test('barcode exact-match helpers never label a different product as identical',
 test('supermarket exposes a camera, photo and manual barcode comparison flow', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const scanner = fs.readFileSync(path.join(__dirname, '..', 'components', 'barcode.js'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.match(html, /id="super-scan"/);
   assert.match(html, /id="barcode-input"[^>]+inputmode="numeric"/);
   assert.match(scanner, /vendor\/zxing-browser\.min\.js/);
@@ -306,5 +370,9 @@ test('supermarket exposes a camera, photo and manual barcode comparison flow', (
   assert.match(scanner, /decodeFromImageUrl/);
   assert.match(scanner, /Mismo código encontrado/);
   assert.match(scanner, /Precios comparables/);
+  assert.match(scanner, /la misma cantidad/);
+  assert.doesNotMatch(scanner, /puede variar en marca o presentación/);
+  assert.match(app, /sizeLabel: data\.product\.quantity/);
+  assert.match(app, /row\.km != null && row\.km <= RADIO_KM/);
 });
 

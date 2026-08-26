@@ -1,13 +1,15 @@
 'use strict';
 
 /* Precios reales para la lista del supermercado.
-   Combina catálogos públicos con el SIPC oficial, limitado a Las Piedras. */
+   Combina catálogos públicos con el SIPC oficial alrededor de cada hogar. */
 
 const CORS_ORIGIN = 'https://martin10app.github.io';
 const { requireApiUser } = require('./_auth');
-const { presentation } = require('./_presentation');
+const { presentation, samePresentation } = require('./_presentation');
 
 const LAS_PIEDRAS_BOUNDS = { v1: -56.28, v2: -34.78, v3: -56.16, v4: -34.68 };
+const DEFAULT_LOCATION = { lat: -34.73, lon: -56.22 };
+const OFFICIAL_RADIUS_KM = 20;
 const SIPC_BASE = 'https://www.precios.uy/sipc2Web/recursos/sipc';
 const CACHE_MS = 10 * 60 * 1000;
 const ARTICLE_CACHE_MS = 6 * 60 * 60 * 1000;
@@ -37,14 +39,54 @@ function tokens(value) {
   return normalize(value).split(' ').filter((word) => word.length > 1 && !IGNORED.has(word) && !/^\d+$/.test(word));
 }
 
+function sanitizeLocation(value) {
+  const lat = Number(value?.lat); const lon = Number(value?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
+function boundsForLocation(value, radiusKm = OFFICIAL_RADIUS_KM) {
+  const location = sanitizeLocation(value);
+  if (!location) return { ...LAS_PIEDRAS_BOUNDS };
+  const latDelta = radiusKm / 111.32;
+  const lonDelta = radiusKm / (111.32 * Math.max(0.2, Math.cos(location.lat * Math.PI / 180)));
+  return {
+    v1: +(location.lon - lonDelta).toFixed(5), v2: +(location.lat - latDelta).toFixed(5),
+    v3: +(location.lon + lonDelta).toFixed(5), v4: +(location.lat + latDelta).toFixed(5),
+  };
+}
+
+function requestInfo(value) {
+  if (typeof value === 'string') return { key: value, name: value, sizeLabel: '' };
+  const name = String(value?.name || '').trim().slice(0, 80);
+  return { key: String(value?.key || name).trim().slice(0, 100), name, sizeLabel: String(value?.sizeLabel || '').trim().slice(0, 30) };
+}
+
+function requestText(value) {
+  const request = requestInfo(value);
+  return `${request.name} ${request.sizeLabel}`.trim();
+}
+
+function areaCacheKey(term, location) {
+  const request = requestInfo(term);
+  const loc = sanitizeLocation(location) || DEFAULT_LOCATION;
+  return `${normalize(requestText(request))}|${loc.lat.toFixed(2)},${loc.lon.toFixed(2)}`;
+}
+
 function relevance(name, term) {
   const haystack = normalize(name);
-  const wanted = tokens(term);
-  if (!wanted.length || !wanted.every((word) => haystack.includes(word))) return 0;
-  let score = wanted.reduce((sum, word) => sum + (haystack.split(' ').includes(word) ? 4 : 2), 0);
-  if (haystack.startsWith(normalize(term))) score += 5;
+  const wanted = tokens(requestInfo(term).name);
+  const available = haystack.split(' ');
+  const wordMatches = (word) => available.some((candidate) => candidate === word
+    || candidate === `${word}s` || word === `${candidate}s`
+    || candidate === `${word}es` || word === `${candidate}es`);
+  if (!wanted.length || !wanted.every(wordMatches)) return 0;
+  if (samePresentation(requestText(term), name) === false) return 0;
   const genericMilk = wanted.length === 1 && wanted[0] === 'leche';
-  if (genericMilk && /dulce|chocolat|polvo|crema|helado/.test(haystack)) score -= 20;
+  if (genericMilk && /dulce|chocolat|polvo|crema|helado|condens|lechera|vegetal|almendra|soja|coco/.test(haystack)) return -1;
+  let score = wanted.reduce((sum, word) => sum + (available.includes(word) ? 4 : 2), 0);
+  if (haystack.startsWith(normalize(requestInfo(term).name))) score += 5;
+  if (samePresentation(requestText(term), name) === true) score += 30;
   return score;
 }
 
@@ -98,8 +140,9 @@ function resultFromProduct(store, product, price, link, { listPrice = null, sour
 }
 
 async function queryTata(term) {
+  const searchName = requestInfo(term).name;
   const variables = {
-    first: 18, after: '0', sort: 'score_desc', term,
+    first: 18, after: '0', sort: 'score_desc', term: searchName,
     selectedFacets: [
       { key: 'channel', value: JSON.stringify({ salesChannel: '4', regionId: '' }) },
       { key: 'locale', value: 'es-uy' },
@@ -148,7 +191,8 @@ async function queryTataBarcode(barcode) {
 }
 
 async function queryElDorado(term) {
-  const url = `https://www.eldorado.com.uy/api/catalog_system/pub/products/search/${encodeURIComponent(term)}?_from=0&_to=17`;
+  const searchName = requestInfo(term).name;
+  const url = `https://www.eldorado.com.uy/api/catalog_system/pub/products/search/${encodeURIComponent(searchName)}?_from=0&_to=17`;
   const products = await fetchJson(url);
   const candidates = [];
   for (const product of Array.isArray(products) ? products : []) {
@@ -262,7 +306,7 @@ async function officialArticles() {
 }
 
 function bestOfficialArticles(all, term, limit = 16) {
-  return all.map((article) => ({ article, score: relevance(article.name, term) }))
+  return all.map((article) => ({ article, score: relevance(`${article.name} ${article.unidad || ''}`, term) }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score || a.article.name.localeCompare(b.article.name, 'es'))
     .slice(0, limit).map((row) => row.article);
@@ -272,12 +316,12 @@ function officialStoreName(value = '') {
   return String(value).split(/-\s*Suc\.?/i)[0].trim().replace(/^Ta\s*-\s*Ta$/i, 'Ta-Ta');
 }
 
-async function queryOfficial(term) {
+async function queryOfficial(term, location) {
   const articles = bestOfficialArticles(await officialArticles(), term);
   if (!articles.length) return [];
   const body = {
     articulos: articles.map((article) => ({ id: String(article.id), name: article.name, cantidad: '1' })),
-    ...LAS_PIEDRAS_BOUNDS,
+    ...boundsForLocation(location),
   };
   const data = await fetchJson(`${SIPC_BASE}/compararCanasta`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/plain' }, body: JSON.stringify(body),
@@ -287,7 +331,7 @@ async function queryOfficial(term) {
 
 function metadataForColumn(column, establishments = []) {
   const columnTokens = tokens(column).filter((word) => word !== 'suc');
-  return establishments.filter((store) => /Las Piedras/i.test(store.localidad || '')).map((store) => {
+  return establishments.map((store) => {
     const storeTokens = new Set(tokens(store.name).filter((word) => word !== 'suc'));
     const score = columnTokens.filter((word) => storeTokens.has(word)).length;
     return { store, score };
@@ -323,11 +367,18 @@ function parseOfficialBasket(data, articles) {
   return [...byStore.values()];
 }
 
-async function pricesForTerm(term) {
-  const key = normalize(term);
+async function pricesForTerm(term, location) {
+  const key = areaCacheKey(term, location);
   const saved = cache.get(key);
   if (saved?.expires > Date.now()) return saved.value;
-  const [tata, elDorado, official] = await Promise.all([queryTata(term), queryElDorado(term), queryOfficial(term)]);
+  // Sin una presentación objetivo no existe una comparación segura: elegir el
+  // precio por litro/kilo mezclaría, por ejemplo, 500 ml con 1 litro.
+  const target = presentation(requestText(term));
+  if (!target.packageQuantity || !target.comparisonUnit) {
+    cache.set(key, { value: [], expires: Date.now() + CACHE_MS });
+    return [];
+  }
+  const [tata, elDorado, official] = await Promise.all([queryTata(term), queryElDorado(term), queryOfficial(term, location)]);
   const byStore = new Map();
   for (const result of [...(official || []), tata, elDorado].filter(Boolean)) {
     const storeKey = normalize(result.store);
@@ -347,21 +398,27 @@ async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (!(await requireApiUser(req, res))) return;
 
+  const location = sanitizeLocation(req.body?.location || req.query);
+  const area = String(req.body?.area || req.query?.area || (location ? 'tu zona' : 'Las Piedras')).trim().slice(0, 40);
+
   if (req.body?.barcode != null) {
     const lookup = await productForBarcode(req.body.barcode);
     if (lookup.error) return res.status(400).json({ error: lookup.error });
-    return res.status(200).json({ ...lookup, area: 'Las Piedras', checkedAt: new Date().toISOString() });
+    return res.status(200).json({ ...lookup, area, checkedAt: new Date().toISOString() });
   }
 
   const incoming = req.body?.terms || (req.query?.q || req.body?.q ? [req.query?.q || req.body?.q] : []);
-  const terms = [...new Set((Array.isArray(incoming) ? incoming : [incoming])
-    .map((value) => String(value || '').trim().slice(0, 80)).filter(Boolean))].slice(0, 6);
+  const requests = (Array.isArray(incoming) ? incoming : [incoming]).map(requestInfo).filter((item) => item.name);
+  const terms = [...new Map(requests.map((item) => [item.key || item.name, item])).values()].slice(0, 6);
   if (!terms.length) return res.status(400).json({ error: 'Falta el producto (q o terms)' });
 
-  const entries = await Promise.all(terms.map(async (term) => [term, await pricesForTerm(term)]));
+  const entries = await Promise.all(terms.map(async (term) => [term.key || term.name, await pricesForTerm(term, location)]));
   const queries = Object.fromEntries(entries.map(([term, results]) => [term, { results }]));
-  if (terms.length === 1 && !Array.isArray(req.body?.terms)) return res.status(200).json({ term: terms[0], results: queries[terms[0]].results });
-  return res.status(200).json({ queries, area: 'Las Piedras', checkedAt: new Date().toISOString() });
+  if (terms.length === 1 && !Array.isArray(req.body?.terms)) {
+    const key = terms[0].key || terms[0].name;
+    return res.status(200).json({ term: key, results: queries[key].results, area });
+  }
+  return res.status(200).json({ queries, area, checkedAt: new Date().toISOString() });
 }
 
 module.exports = handler;
@@ -369,4 +426,5 @@ module.exports._test = {
   normalize, relevance, bestOfficialArticles, officialStoreName, resultFromProduct, parseOfficialBasket,
   queryOfficial, pricesForTerm, cleanBarcode, validBarcode, sameBarcode, genericProductTerm,
   tataExactProduct, elDoradoExactProduct, queryOpenFoodFacts, productForBarcode,
+  sanitizeLocation, boundsForLocation, areaCacheKey, requestInfo,
 };

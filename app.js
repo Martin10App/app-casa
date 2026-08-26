@@ -17,8 +17,8 @@ import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycl
 import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
 import { initSupermarket, renderSupermarket } from './components/supermarket.js';
 import { initBarcodeScanner } from './components/barcode.js';
-import { inferShoppingCategory } from './utils/shopping.mjs';
-import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
+import { inferShoppingCategory, comparableSavedPresentation, packageQuantityFromLabel } from './utils/shopping.mjs';
+import { loadSupers, nearestBranch, nearestArea, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 import { localISODate } from './utils/date.js';
@@ -43,6 +43,7 @@ const state = {
   inventory: [],
   compras: [],           // boletas escaneadas con su desglose
   userLoc: null,         // { lat, lon } cuando el usuario comparte ubicación
+  areaName: 'Las Piedras',
   supers: null,          // catálogo de supermercados (para distancias)
   tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
@@ -125,6 +126,40 @@ const PRIO_COLOR = { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--r
 const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 
 const RADIO_KM = 15;   // solo recomendamos súper dentro de este radio
+const LEGACY_LOCATION = { lat: -34.73, lon: -56.22 };
+
+function locationStorageKey() {
+  return state.household.legacy ? 'nh_loc' : `nh_loc_${state.household.id}`;
+}
+
+function refreshAreaName() {
+  if (!state.userLoc || !state.supers) return;
+  state.areaName = nearestArea(state.userLoc.lat, state.userLoc.lon, state.supers)?.name || 'tu zona';
+}
+
+function latestPriceReference(name) {
+  const product = state.prices.find((row) => normalize(row.name) === normalize(name));
+  return [...(product?.entries || [])].sort((a, b) => Number(b.date || 0) - Number(a.date || 0))[0] || null;
+}
+
+function comparisonRequest(name) {
+  const reference = latestPriceReference(name);
+  let sizeLabel = reference?.sizeLabel || '';
+  let packageQuantity = Number(reference?.packageQuantity) || null;
+  if (!packageQuantity && Number(reference?.price) > 0 && Number(reference?.comparisonPrice) > 0) {
+    packageQuantity = Number(reference.price) / Number(reference.comparisonPrice);
+  }
+  if (!sizeLabel && reference?.comparisonUnit && packageQuantity) sizeLabel = `${String(+packageQuantity.toFixed(3)).replace('.', ',')} ${reference.comparisonUnit}`;
+  return { key: name, name, sizeLabel };
+}
+
+function comparisonLocation() {
+  const location = state.userLoc || (state.household.legacy ? LEGACY_LOCATION : null);
+  if (!location) return null;
+  // Para buscar comercios alcanza una precisión aproximada de 100 metros.
+  // No se envían al servidor más decimales de la ubicación del teléfono.
+  return { lat: +location.lat.toFixed(3), lon: +location.lon.toFixed(3) };
+}
 
 /**
  * Ranking de dónde comprar un producto: más baratos primero, teniendo en
@@ -137,7 +172,8 @@ function topPlaces(name, n = 3) {
   if (!prod || !prod.entries?.length) return [];
 
   const { userLoc, supers } = state;
-  let candidatos = prod.entries.map((e) => {
+  const reference = latestPriceReference(name);
+  let candidatos = prod.entries.filter((entry) => comparableSavedPresentation(reference, entry)).map((e) => {
     let km = null;
     if (userLoc && supers) {
       const near = nearestBranch(e.store, userLoc.lat, userLoc.lon, supers);
@@ -147,6 +183,8 @@ function topPlaces(name, n = 3) {
       store: e.store, price: e.price, km,
       comparisonPrice: e.comparisonPrice || null,
       comparisonUnit: e.comparisonUnit || null,
+      sizeLabel: e.sizeLabel || '',
+      packageQuantity: Number(e.packageQuantity) || packageQuantityFromLabel(e.sizeLabel, e.comparisonUnit),
       rankPrice: e.comparisonPrice || e.price,
     };
   });
@@ -172,12 +210,19 @@ function cheapestFor(name) {
 async function comparePrices(name) {
   const mine = topPlaces(name, 10).map((p) => ({ ...p, source: 'boleta' }));
 
+  // Un hogar nuevo debe activar su ubicación antes de consultar comercios:
+  // usar Las Piedras como respaldo mezclaría zonas.
+  if (!comparisonLocation()) return mine;
+
   let online = [];
   try {
-    const r = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
+    const r = await apiFetch(PRECIOS_API, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms: [comparisonRequest(name)], location: comparisonLocation(), area: state.areaName }),
+    });
     if (r.ok) {
       const d = await r.json();
-      online = (d.results || []).map((x) => ({
+      online = (d.queries?.[name]?.results || []).map((x) => ({
         store: x.store,
         price: x.price,
         comparisonPrice: x.comparisonPrice || null,
@@ -186,7 +231,7 @@ async function comparePrices(name) {
         detail: x.product,
         source: x.source || 'online',
         km: (state.userLoc && state.supers) ? (nearestBranch(x.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null) : null,
-      }));
+      })).filter((row) => row.km == null || row.km <= RADIO_KM);
     }
   } catch { /* sin online, seguimos con lo tuyo */ }
 
@@ -203,23 +248,31 @@ async function comparePrices(name) {
 async function compareShoppingPrices(names) {
   const unique = [...new Set(names.map((name) => String(name || '').trim()).filter(Boolean))];
   const output = {};
+  if (!comparisonLocation()) {
+    for (const term of unique) {
+      const results = topPlaces(term, 10).map((row) => ({ ...row, source: 'boleta', product: term }));
+      output[term] = { results, best: results[0] || null };
+    }
+    return output;
+  }
   for (let start = 0; start < unique.length; start += 6) {
-    const terms = unique.slice(start, start + 6);
+    const keys = unique.slice(start, start + 6);
+    const terms = keys.map(comparisonRequest);
     const response = await apiFetch(PRECIOS_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ terms }),
+      body: JSON.stringify({ terms, location: comparisonLocation(), area: state.areaName }),
     });
     if (!response.ok) throw new Error(`PRICE_API_${response.status}`);
     const data = await response.json();
-    for (const term of terms) {
+    for (const term of keys) {
       const live = (data.queries?.[term]?.results || []).map((row) => ({
         ...row,
         rankPrice: row.comparisonPrice || row.price,
         km: (state.userLoc && state.supers)
           ? (nearestBranch(row.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null)
           : null,
-      }));
+      })).filter((row) => row.km == null || row.km <= RADIO_KM);
       const own = topPlaces(term, 10).map((row) => ({ ...row, source: 'boleta', product: term }));
       const byStore = new Map();
       for (const row of [...live, ...own]) {
@@ -235,20 +288,34 @@ async function compareShoppingPrices(names) {
 
 /** Identifica un producto por EAN/UPC y completa la respuesta con precios comparables. */
 async function lookupBarcode(barcode) {
+  const location = comparisonLocation();
   const response = await apiFetch(PRECIOS_API, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ barcode }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ barcode, location, area: state.areaName }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `BARCODE_API_${response.status}`);
-  if (!data.product?.searchTerm) return { ...data, comparableResults: [] };
+  if (!location) return { ...data, exactResults: [], comparableResults: [] };
+
+  state.supers ||= await loadSupers();
+  const localRows = (rows = []) => rows.map((row) => ({
+    ...row,
+    km: nearestBranch(row.store, location.lat, location.lon, state.supers)?.km ?? null,
+  })).filter((row) => row.km != null && row.km <= RADIO_KM);
+  const exactResults = localRows(data.exactResults);
+  if (!data.product?.searchTerm || !data.product?.quantity) return { ...data, exactResults, comparableResults: [] };
 
   try {
-    const comparableResponse = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(data.product.searchTerm)}`);
-    if (!comparableResponse.ok) return { ...data, comparableResults: [] };
+    const request = { key: data.product.searchTerm, name: data.product.searchTerm, sizeLabel: data.product.quantity };
+    const comparableResponse = await apiFetch(PRECIOS_API, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms: [request], location, area: state.areaName }),
+    });
+    if (!comparableResponse.ok) return { ...data, exactResults, comparableResults: [] };
     const comparableData = await comparableResponse.json();
-    return { ...data, comparableResults: comparableData.results || [] };
+    return { ...data, exactResults, comparableResults: localRows(comparableData.queries?.[request.key]?.results) };
   } catch {
-    return { ...data, comparableResults: [] };
+    return { ...data, exactResults, comparableResults: [] };
   }
 }
 
@@ -310,7 +377,8 @@ async function activarUbicacion() {
   try {
     state.supers = await loadSupers();
     state.userLoc = await getLocation();
-    localStorage.setItem('nh_loc', JSON.stringify(state.userLoc));   // la recordamos
+    localStorage.setItem(locationStorageKey(), JSON.stringify(state.userLoc));
+    refreshAreaName();
     toast('Listo: ahora te recomiendo por precio y cercanía 📍', { emoji: '📍', type: 'success' });
     rerender();
     return true;
@@ -820,6 +888,8 @@ function inviteUrl(inviteId) {
 
 function enterHousehold(context) {
   state.household = context;
+  state.userLoc = null;
+  state.areaName = context.legacy ? 'Las Piedras' : 'tu zona';
   state.me = context.profileId;
   localStorage.setItem('nh_me', state.me);
   configureHousehold(context);
@@ -880,18 +950,19 @@ function startApp() {
 
   // Ubicación recordada: se marca UNA vez y la app la recuerda para siempre
   try {
-    const savedLoc = JSON.parse(localStorage.getItem('nh_loc') || 'null');
+    const savedLoc = JSON.parse(localStorage.getItem(locationStorageKey()) || 'null');
     if (savedLoc && typeof savedLoc.lat === 'number') state.userLoc = savedLoc;
   } catch { /* nada */ }
   // Cargar el mapa de súper (para las distancias) apenas arranca
-  loadSupers().then((s) => { state.supers = s; if (state.userLoc) rerender(); });
+  loadSupers().then((s) => { state.supers = s; refreshAreaName(); if (state.userLoc) rerender(); });
   // Si ya diste permiso antes, refrescar la ubicación EN SILENCIO (sin pedir nada)
   if (navigator.permissions?.query) {
     navigator.permissions.query({ name: 'geolocation' }).then((p) => {
       if (p.state === 'granted') {
         getLocation().then((loc) => {
           state.userLoc = loc;
-          localStorage.setItem('nh_loc', JSON.stringify(loc));
+          localStorage.setItem(locationStorageKey(), JSON.stringify(loc));
+          refreshAreaName();
           rerender();
         }).catch(() => { /* seguimos con la guardada */ });
       }
@@ -1155,6 +1226,9 @@ async function boot() {
     getPrices: () => state.prices,
     getMe: () => state.me,
     getUsers: () => state.users,
+    getAreaName: () => state.areaName,
+    hasComparisonLocation: () => Boolean(comparisonLocation()),
+    activarUbicacion,
     cheapestFor,
     compareShoppingPrices,
     dealText,
@@ -1166,7 +1240,7 @@ async function boot() {
     notifyOther: (name, category) => pushToOther(`${userOf(state.me).name} agregó: ${name}`, CATEGORIES[category]?.label || 'Compras'),
   });
 
-  initBarcodeScanner({ lookupBarcode, addScannedItem });
+  initBarcodeScanner({ lookupBarcode, addScannedItem, getAreaName: () => state.areaName });
 
   // Libreta de precios
   initPrices({
