@@ -1,6 +1,8 @@
 # 🏠 Nuestro Hogar
 
-Centro de organización familiar: compras compartidas, recordatorios, regalos, gastos imprevistos y más — sincronizado en tiempo real entre los dos.
+Centro de organización familiar: compras compartidas, recordatorios, regalos, gastos imprevistos y más — sincronizado en tiempo real dentro de cada hogar.
+
+La app admite varias casas independientes. Cada integrante usa su propia cuenta de Google y solamente puede acceder al hogar al que pertenece. La casa histórica de Martín y Lucía conserva sus colecciones originales para no migrar ni arriesgar sus datos actuales.
 
 **PWA instalable** en Android, iPhone, Windows y Mac.
 
@@ -16,18 +18,7 @@ La app arranca en **modo local** (guarda en el navegador) para que puedas probar
 2. **Agregar proyecto** → nombre: `nuestro-hogar` → podés desactivar Analytics → **Crear**.
 3. En el panel, menú **Compilación → Firestore Database** → **Crear base de datos** → ubicación `southamerica-east1` (São Paulo, la más cercana) → empezar en **modo de prueba**.
 
-> ⚠️ El modo de prueba expira a los 30 días. Después andá a la pestaña **Reglas** y pegá esto (acceso abierto solo para quien tenga la URL de tu app; para uso de dos personas alcanza, pero si querés más seguridad se puede agregar Firebase Auth):
->
-> ```
-> rules_version = '2';
-> service cloud.firestore {
->   match /databases/{database}/documents {
->     match /{document=**} {
->       allow read, write: if true;
->     }
->   }
-> }
-> ```
+> ⚠️ No uses reglas abiertas. Publicá el archivo `firestore.rules` incluido en este proyecto. Es el que separa los hogares y conserva el acceso privado a los datos históricos.
 
 ## 2. Registrar la app web
 

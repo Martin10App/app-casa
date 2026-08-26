@@ -7,7 +7,7 @@
 
 import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveReceiptBundle, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveReceiptBundle, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens, configureHousehold, resolveHousehold, createHousehold, joinHousehold } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
@@ -23,6 +23,7 @@ import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 import { localISODate } from './utils/date.js';
 import { apiFetch } from './utils/api.js';
+import { legacyProfileFor, householdDraft, cardsForHousehold, inviteCodeFromLocation } from './utils/households.mjs';
 
 /* ================= Estado ================= */
 const DEFAULT_USERS = {
@@ -36,16 +37,6 @@ const VAPID_KEY  = 'BMgNBXFXY6duoOgmOEVtc90f8c4SUwbMmxSCBgy_pHe279qHEXH09Ijwa4bV
 const NOTIFY_API = 'https://app-casa-omega.vercel.app/api/notificar';
 const PRECIOS_API = 'https://app-casa-omega.vercel.app/api/precios-online';
 
-/* Correos de Google autorizados → a qué perfil corresponde cada uno.
-   Solo estas cuentas pueden entrar (la base queda cerrada a ellas).
-   ⚠️ Van en minúsculas. */
-const ALLOWED_USERS = {
-  'martinmolina10101@gmail.com': 'u1',
-  // Lucía puede tener varias cuentas → habilitamos todas las candidatas como u2
-  'luciia0295@gmail.com':        'u2',
-  'brumitta1608@gmail.com':      'u2',
-};
-
 const state = {
   items: [],
   prices: [],
@@ -56,6 +47,7 @@ const state = {
   tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
+  household: { id: 'martin-lucia', name: 'Hogar de Martín y Lucía', legacy: true, inviteId: '' },
   me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
   view: 'home',
   activeCard: null,                            // tarjeta abierta en la vista de lista
@@ -66,6 +58,7 @@ const state = {
 
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const userOf = (id) => state.users[id] || { name: '—', emoji: '👤', bg: '#eee' };
+const householdCards = () => cardsForHousehold(HOME_CARDS, state.home);
 
 /** Avatar de un usuario: foto real si la cargó, si no su emoji. */
 function avatarHtml(id, cls = 'avatar-mini') {
@@ -384,7 +377,7 @@ function featuredBoletaHtml() {
 /* ================= Render: Inicio ================= */
 function renderHome() {
   const p = pending();
-  const cards = HOME_CARDS.map((card, i) => {
+  const cards = householdCards().map((card, i) => {
     // La de boletas va destacada aparte, no en la grilla
     if (card.special === 'purchases') return '';
     const count = card.special === 'prices'
@@ -413,7 +406,7 @@ function renderHome() {
 
 /* ================= Render: lista de una tarjeta ================= */
 function renderList() {
-  const card = HOME_CARDS.find((c) => c.id === state.activeCard);
+  const card = householdCards().find((c) => c.id === state.activeCard);
   if (!card) return;
   const items = pending().filter((it) => card.cats.includes(it.category));
   $('#list-title').textContent = card.label;
@@ -654,12 +647,13 @@ function detectChanges(items) {
 }
 
 /* ================= Notificaciones push (al otro) ================= */
-const otherUser = () => (state.me === 'u1' ? 'u2' : 'u1');
+const otherUser = () => Object.keys(state.users).find((id) => id !== state.me && !state.users[id]?.pending) || null;
 
 /** Le manda un aviso al celular del otro, aunque tenga la app cerrada.
     Es "dispará y seguí": si falla, no molesta al usuario. */
 function pushToOther(title, body = '') {
-  const tokens = state.tokens?.[otherUser()] || [];
+  const recipient = otherUser();
+  const tokens = recipient ? (state.tokens?.[recipient] || []) : [];
   if (!tokens.length || !authEnabled()) return;
   apiFetch(NOTIFY_API, {
     method: 'POST',
@@ -760,6 +754,7 @@ function showSettings() {
       </div>
     </div>`).join('');
   $('#settings-signout').hidden = !authEnabled();   // "Cerrar sesión" solo en modo nube
+  $('#settings-invite').hidden = state.household.legacy || !state.household.inviteId || (state.household.memberUids?.length || 0) >= 2;
   $('#settings-overlay').hidden = false;
 }
 
@@ -812,6 +807,71 @@ function showAuthGate(mode, email = '') {
   }
 }
 
+let pendingAuthUser = null;
+let resolvingSession = false;
+
+function inviteUrl(inviteId) {
+  const url = new URL(location.href);
+  url.search = '';
+  url.hash = '';
+  url.searchParams.set('invite', inviteId);
+  return url.toString();
+}
+
+function enterHousehold(context) {
+  state.household = context;
+  state.me = context.profileId;
+  localStorage.setItem('nh_me', state.me);
+  configureHousehold(context);
+  $('#auth-overlay').hidden = true;
+  $('#household-overlay').hidden = true;
+  startApp();
+}
+
+function showHouseholdSetup(user) {
+  pendingAuthUser = user;
+  const code = inviteCodeFromLocation(location);
+  const joining = Boolean(code);
+  $('#auth-overlay').hidden = true;
+  $('#household-overlay').hidden = false;
+  $('#household-form').hidden = joining;
+  $('#household-join').hidden = !joining;
+  $('#household-title').textContent = joining ? 'Sumate a su hogar' : 'Creá su hogar';
+  $('#household-sub').textContent = joining
+    ? 'La invitación conecta a la pareja, pero mantiene esta casa separada de todas las demás.'
+    : 'Sus gastos, compras, boletas y perfiles quedarán en una casa independiente.';
+  $('#household-me').value = user.name || '';
+  $('#household-name').value = user.name ? `Hogar de ${user.name.split(' ')[0]}` : '';
+  $('#household-error').hidden = true;
+}
+
+function householdError(message) {
+  const error = $('#household-error');
+  error.textContent = message;
+  error.hidden = false;
+}
+
+async function resolveSignedInUser(user) {
+  if (resolvingSession || appStarted) return;
+  resolvingSession = true;
+  try {
+    const legacyProfile = legacyProfileFor(user);
+    if (legacyProfile) {
+      enterHousehold({ id: 'martin-lucia', name: 'Hogar de Martín y Lucía', profileId: legacyProfile, legacy: true });
+      return;
+    }
+    const context = await resolveHousehold(user);
+    if (context) enterHousehold(context);
+    else showHouseholdSetup(user);
+  } catch (error) {
+    console.error('[Hogar]', error);
+    showAuthGate('denied', user.email || '');
+    $('#auth-sub').insertAdjacentText('beforeend', ' No pudimos comprobar a qué hogar pertenece.');
+  } finally {
+    resolvingSession = false;
+  }
+}
+
 /* ================= Arranque de datos (una sola vez, tras el login) ================= */
 let appStarted = false;
 function startApp() {
@@ -839,7 +899,8 @@ function startApp() {
   }
 
   subscribeUsers((users) => {
-    state.users = { ...structuredClone(DEFAULT_USERS), ...users };
+    state.users = state.household.legacy ? { ...structuredClone(DEFAULT_USERS), ...users } : { ...users };
+    if (authEnabled()) $('#user-overlay').hidden = true;
     renderAvatarBtn();
     rerender();
   });
@@ -862,6 +923,7 @@ function startApp() {
 
   subscribeHome((home) => {
     state.home = { cards: {}, ...home };
+    if (state.home.cardLabels?.alma) CATEGORIES.alma.label = state.home.cardLabels.alma;
     if (state.view === 'home') renderHome();
     if (state.view === 'compras') renderCompras();
   });
@@ -887,7 +949,10 @@ function startApp() {
   });
 
   // Usuario actual (en modo nube ya viene del login; en local, elegir)
-  if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
+  if (authEnabled()) {
+    // En nube el perfil viene ligado a la cuenta; esperamos la primera suscripción.
+    $('#user-overlay').hidden = true;
+  } else if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
     renderAvatarBtn();
   } else {
     showUserPicker();
@@ -926,6 +991,50 @@ async function boot() {
       } finally { btn.disabled = false; }
     });
     $('#auth-signout').addEventListener('click', () => signOutUser());
+    $('#household-signout').addEventListener('click', () => signOutUser());
+    $('#household-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!pendingAuthUser) return;
+      const button = $('#household-create');
+      button.disabled = true;
+      button.textContent = 'Creando hogar…';
+      $('#household-error').hidden = true;
+      try {
+        const draft = householdDraft({
+          name: $('#household-name').value,
+          myName: $('#household-me').value,
+          partnerName: $('#household-partner').value,
+          childName: $('#household-child').value,
+        }, pendingAuthUser);
+        const context = await createHousehold(draft, pendingAuthUser);
+        enterHousehold(context);
+        const link = inviteUrl(context.inviteId);
+        try { await navigator.clipboard.writeText(link); } catch { /* se puede compartir desde ajustes */ }
+        toast('Hogar creado. Copiamos la invitación para tu pareja.', { emoji: '🏠', type: 'success', duration: 6500 });
+      } catch (error) {
+        console.error('[Crear hogar]', error);
+        householdError('No pudimos crear el hogar. Revisá la conexión e intentá nuevamente.');
+      } finally { button.disabled = false; button.textContent = 'Crear hogar separado'; }
+    });
+    $('#household-join-btn').addEventListener('click', async () => {
+      if (!pendingAuthUser) return;
+      const button = $('#household-join-btn');
+      button.disabled = true;
+      button.textContent = 'Uniéndote al hogar…';
+      $('#household-error').hidden = true;
+      try {
+        const context = await joinHousehold(inviteCodeFromLocation(location), pendingAuthUser);
+        history.replaceState({}, '', location.pathname);
+        enterHousehold(context);
+        toast(`Ya estás dentro de ${escapeHtml(context.name || 'su hogar')}`, { emoji: '🏠', type: 'success' });
+      } catch (error) {
+        console.error('[Unirse al hogar]', error);
+        const message = error.message === 'household-full'
+          ? 'Este hogar ya tiene sus dos integrantes.'
+          : 'La invitación no existe, venció o ya fue utilizada.';
+        householdError(message);
+      } finally { button.disabled = false; button.textContent = 'Aceptar invitación'; }
+    });
     $('#auth-copylink').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(location.href); toast('Enlace copiado ✓ Pegalo en Safari', { emoji: '📋', type: 'success' }); }
       catch { toast('Copiá el enlace desde la barra de arriba', { emoji: '📋' }); }
@@ -936,14 +1045,7 @@ async function boot() {
 
     onAuthChange((user) => {
       if (!user) { showAuthGate('signin'); return; }
-      const email = (user.email || '').toLowerCase();
-      const mapped = ALLOWED_USERS[email];
-      if (!mapped) { showAuthGate('denied', email); return; }
-      // Cuenta autorizada
-      state.me = mapped;
-      localStorage.setItem('nh_me', mapped);
-      $('#auth-overlay').hidden = true;
-      startApp();
+      resolveSignedInUser(user);
     });
   } else {
     toast('Modo local: falta pegar la config de Firebase para sincronizar entre celulares (ver README)', { emoji: '📴', duration: 6500 });
@@ -1052,6 +1154,7 @@ async function boot() {
     getPurchases: () => state.compras,
     getPrices: () => state.prices,
     getMe: () => state.me,
+    getUsers: () => state.users,
     cheapestFor,
     compareShoppingPrices,
     dealText,
@@ -1111,7 +1214,7 @@ async function boot() {
   $('#fab').addEventListener('click', () => {
     if (state.view === 'prices') { openPriceModal(); return; }
     if (state.view === 'inventory') { openInventoryModal(); return; }
-    const card = state.view === 'list' ? HOME_CARDS.find((c) => c.id === state.activeCard) : null;
+    const card = state.view === 'list' ? householdCards().find((c) => c.id === state.activeCard) : null;
     openModal(card ? card.cats[0] : null);
   });
 
@@ -1124,7 +1227,7 @@ async function boot() {
     // Incluye tanto las tarjetas normales (.home-card) como el banner destacado (.home-featured)
     const cardEl = e.target.closest('[data-card]');
     if (!cardEl) return;
-    const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
+    const card = householdCards().find((c) => c.id === cardEl.dataset.card);
     if (card?.special === 'purchases') { show('compras'); return; }
     if (card?.special === 'prices') { show('prices'); return; }
     if (card?.special === 'inventory') { show('inventory'); return; }
@@ -1181,6 +1284,15 @@ async function boot() {
   $('#btn-edit-users').addEventListener('click', () => { $('#user-overlay').hidden = true; showSettings(); });
   $('#settings-signout').addEventListener('click', () => signOutUser());
   $('#settings-notif').addEventListener('click', activarNotificaciones);
+  $('#settings-invite').addEventListener('click', async () => {
+    const link = inviteUrl(state.household.inviteId);
+    try {
+      if (navigator.share) await navigator.share({ title: state.household.name || 'Nuestro Hogar', text: 'Sumate a nuestro hogar en la app', url: link });
+      else { await navigator.clipboard.writeText(link); toast('Invitación copiada', { emoji: '📋', type: 'success' }); }
+    } catch (error) {
+      if (error.name !== 'AbortError') toast('No pudimos compartir. Probá nuevamente.', { emoji: '⚠️' });
+    }
+  });
 
   // Ajustes de usuarios
   $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; if (!authEnabled()) showUserPicker(); });

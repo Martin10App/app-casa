@@ -261,6 +261,28 @@
     </div>
   </div>
 
+  <!-- ================= ALTA / INVITACIÓN DE UN HOGAR ================= -->
+  <div class="user-overlay" id="household-overlay" hidden>
+    <div class="user-card household-card">
+      <span class="user-card__logo">🏠</span>
+      <h2 class="user-card__title" id="household-title">Creá su hogar</h2>
+      <p class="user-card__sub" id="household-sub">Cada hogar guarda sus gastos, compras y recuerdos por separado.</p>
+      <form id="household-form" class="household-form">
+        <label class="field"><span class="field__label">Nombre de la casa</span><input class="field__input" id="household-name" maxlength="40" required placeholder="Nuestra casa"></label>
+        <label class="field"><span class="field__label">Tu nombre</span><input class="field__input" id="household-me" maxlength="40" required autocomplete="name"></label>
+        <label class="field"><span class="field__label">Nombre de tu pareja</span><input class="field__input" id="household-partner" maxlength="40" required></label>
+        <label class="field"><span class="field__label">Nombre de la tarjeta infantil</span><input class="field__input" id="household-child" maxlength="40" placeholder="Por ejemplo, Julieta"><small>Esto reemplaza “Alma” solamente dentro de esta casa.</small></label>
+        <button class="btn btn--primary" id="household-create" type="submit">Crear hogar separado</button>
+      </form>
+      <div id="household-join" class="household-join" hidden>
+        <p>Te invitaron a compartir una casa. Al aceptar, solamente verás los datos de ese hogar.</p>
+        <button class="btn btn--primary" id="household-join-btn" type="button">Aceptar invitación</button>
+      </div>
+      <p class="household-error" id="household-error" role="alert" hidden></p>
+      <button class="btn btn--ghost btn--small" id="household-signout" type="button">Entrar con otra cuenta</button>
+    </div>
+  </div>
+
   <!-- ================= SELECTOR DE USUARIO (primer uso) ================= -->
   <div class="user-overlay" id="user-overlay" hidden>
     <div class="user-card">
@@ -283,6 +305,7 @@
         <button class="btn btn--primary" id="settings-save">Guardar</button>
       </div>
       <button class="btn btn--ghost btn--small settings-notif" id="settings-notif">🔔 Activar notificaciones en este celular</button>
+      <button class="btn btn--ghost btn--small" id="settings-invite" hidden>Compartir invitación con mi pareja</button>
       <button class="btn btn--ghost btn--small settings-signout" id="settings-signout" hidden>Cerrar sesión</button>
     </div>
   </div>

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { localISODate } = require('../api/_date');
 const { presentation } = require('../api/_presentation');
-const { extractBearer, validateClaims } = require('../api/_auth');
+const { extractBearer, validateClaims, validateVerifiedClaims } = require('../api/_auth');
 
 test('Uruguay keeps the local calendar date after UTC midnight', () => {
   assert.equal(localISODate(new Date('2026-08-13T00:30:00Z')), '2026-08-12');
@@ -29,6 +29,28 @@ test('API authorization accepts only verified household accounts', () => {
   assert.equal(validateClaims({ ...base, email: 'MartinMolina10101@gmail.com' }, now).email, 'martinmolina10101@gmail.com');
   assert.throws(() => validateClaims({ ...base, email: 'intruso@example.com' }, now), /forbidden/);
   assert.equal(extractBearer({ headers: { authorization: 'Bearer token-value' } }), 'token-value');
+  assert.equal(validateVerifiedClaims({ ...base, email: 'hermana@example.com' }, now).email, 'hermana@example.com');
+});
+
+test('households keep legacy data stable and customize each child card independently', async () => {
+  const households = await import('../utils/households.mjs');
+  assert.equal(households.legacyProfileFor({ email: 'MartinMolina10101@gmail.com' }), 'u1');
+  assert.equal(households.legacyProfileFor({ email: 'hermana@example.com' }), null);
+  const cards = households.cardsForHousehold([{ id: 'alma', label: 'Alma' }, { id: 'gastos', label: 'Gastos' }], {
+    cardLabels: { alma: 'Julieta' },
+  });
+  assert.deepEqual(cards.map((card) => card.label), ['Julieta', 'Gastos']);
+  assert.equal(households.cardsForHousehold([{ id: 'alma', label: 'Alma' }], {})[0].label, 'Alma');
+});
+
+test('cloud storage uses household subcollections while preserving the legacy root collections', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'firebase.js'), 'utf8');
+  const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
+  assert.match(source, /context\?\.legacy \? null : \['households', context\.id\]/);
+  assert.match(source, /configureHousehold\(\{ id: 'martin-lucia', legacy: true \}\)/);
+  assert.match(rules, /householdMemberAfter/);
+  assert.match(rules, /legacyMember/);
+  assert.match(rules, /request\.auth\.uid in get/);
 });
 
 test('private APIs reject missing Firebase authentication before processing', async () => {

@@ -26,7 +26,7 @@ const CORS_ORIGIN = 'https://martin10app.github.io';
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Household-ID');
 }
 
 module.exports = async (req, res) => {

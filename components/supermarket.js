@@ -235,12 +235,14 @@ function renderStorefrontShell() {
 }
 
 function buildStorefrontOverlay() {
+  const householdNames = Object.values(deps.getUsers?.() || {}).filter((user) => !user.pending).map((user) => user.name).filter(Boolean);
+  const people = householdNames.length ? householdNames.join(' y ') : 'los integrantes de la casa';
   storefrontOverlay = document.createElement('div');
   storefrontOverlay.className = 'modal-overlay';
   storefrontOverlay.id = 'storefront-overlay';
   storefrontOverlay.innerHTML = `<section class="modal storefront-modal" role="dialog" aria-modal="true" aria-labelledby="storefront-title">
     <div class="modal__handle"></div>
-    <header class="modal__header"><div><h2 class="modal__title" id="storefront-title">Tu súper</h2><small class="storefront-subtitle">Elegido según lo que compran Martín y Lucía</small></div><button type="button" class="icon-btn" id="storefront-close" aria-label="Cerrar">${ICONS.close}</button></header>
+    <header class="modal__header"><div><h2 class="modal__title" id="storefront-title">Tu súper</h2><small class="storefront-subtitle">Elegido según lo que compran ${escapeHtml(people)}</small></div><button type="button" class="icon-btn" id="storefront-close" aria-label="Cerrar">${ICONS.close}</button></header>
     <div class="modal__body storefront-body" id="storefront-body"></div>
   </section>`;
   document.body.appendChild(storefrontOverlay);
