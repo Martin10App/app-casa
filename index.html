@@ -261,6 +261,80 @@
     </div>
   </div>
 
+  <!-- ================= ALTA / INVITACIÓN DE UN HOGAR ================= -->
+  <div class="user-overlay" id="household-overlay" hidden>
+    <div class="user-card household-card">
+      <span class="user-card__logo" aria-hidden="true">🏠</span>
+      <h2 class="user-card__title" id="household-title">Creá su hogar</h2>
+      <p class="user-card__sub" id="household-sub">Cada hogar guarda sus gastos, compras y recuerdos por separado.</p>
+      <form id="household-form" class="household-form" novalidate>
+        <div class="setup-progress" aria-label="Progreso de configuración">
+          <span class="is-active" data-setup-dot="1"><i>Casa</i></span><span data-setup-dot="2"><i>Familia</i></span><span data-setup-dot="3"><i>Gastos</i></span><span data-setup-dot="4"><i>Revisar</i></span>
+        </div>
+
+        <section class="setup-step" data-setup-step="1">
+          <div class="setup-step__heading"><span>Paso 1 de 4</span><h3>Su casa</h3><p>Estos datos identifican únicamente este hogar.</p></div>
+          <label class="field"><span class="field__label">Nombre de la casa</span><input class="field__input" id="household-name" maxlength="40" required placeholder="Hogar de Ana y Pablo" autocomplete="organization"></label>
+          <label class="field"><span class="field__label">Nombre de la tarjeta infantil</span><input class="field__input" id="household-child" maxlength="40" required placeholder="Por ejemplo, Julieta"><small>Reemplaza “Alma” solamente dentro de esta casa.</small></label>
+          <div class="setup-location">
+            <div><b>Zona para comparar precios</b><small id="household-location-status">Podés activarla ahora o hacerlo más adelante.</small></div>
+            <button class="btn btn--ghost btn--small" id="household-location" type="button">Usar mi ubicación</button>
+          </div>
+        </section>
+
+        <section class="setup-step" data-setup-step="2" hidden>
+          <div class="setup-step__heading"><span>Paso 2 de 4</span><h3>Los de la casa</h3><p>Cada uno entrará después con su propia cuenta de Google.</p></div>
+          <div class="setup-person">
+            <button class="setup-photo" type="button" data-setup-photo="owner" aria-label="Cargar tu foto"><span data-photo-preview="owner">👤</span><i data-icon="camera"></i></button>
+            <label class="field"><span class="field__label">Tu nombre</span><input class="field__input" id="household-me" maxlength="40" required autocomplete="name"></label>
+          </div>
+          <div class="setup-person">
+            <button class="setup-photo" type="button" data-setup-photo="partner" aria-label="Cargar foto de tu pareja"><span data-photo-preview="partner">👤</span><i data-icon="camera"></i></button>
+            <label class="field"><span class="field__label">Nombre de tu pareja</span><input class="field__input" id="household-partner" maxlength="40" required autocomplete="name"></label>
+          </div>
+          <div class="setup-person setup-person--child">
+            <button class="setup-photo" type="button" data-setup-photo="child" aria-label="Cargar foto de la tarjeta infantil"><span data-photo-preview="child">👧</span><i data-icon="camera"></i></button>
+            <div><b>Foto de <span id="household-child-preview">la tarjeta infantil</span></b><small>Opcional. También podrán cambiarla después.</small></div>
+          </div>
+          <input type="file" id="household-photo-owner" accept="image/*" hidden>
+          <input type="file" id="household-photo-partner" accept="image/*" hidden>
+          <input type="file" id="household-photo-child" accept="image/*" hidden>
+        </section>
+
+        <section class="setup-step" data-setup-step="3" hidden>
+          <div class="setup-step__heading"><span>Paso 3 de 4</span><h3>Objetivos de gastos</h3><p>Se aplican a cada período de tarjeta, del día 24 al 23.</p></div>
+          <label class="field"><span class="field__label">Gasto ideal</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-ideal" type="number" min="1" step="100" inputmode="decimal" required value="30000"></span><small>Hasta este monto, el semáforo permanece en verde.</small></label>
+          <label class="field"><span class="field__label">Límite máximo</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-limit" type="number" min="1" step="100" inputmode="decimal" required value="35000"></span><small>Al superarlo, el semáforo cambia a rojo.</small></label>
+          <div class="setup-budget-legend" aria-label="Funcionamiento del semáforo"><span><i class="is-green"></i>Ideal</span><span><i class="is-yellow"></i>Atención</span><span><i class="is-red"></i>Superado</span></div>
+        </section>
+
+        <section class="setup-step" data-setup-step="4" hidden>
+          <div class="setup-step__heading"><span>Paso 4 de 4</span><h3>Todo pronto</h3><p>Revisá antes de crear el hogar separado.</p></div>
+          <dl class="setup-review">
+            <div><dt>Casa</dt><dd id="household-review-home"></dd></div>
+            <div><dt>Integrantes</dt><dd id="household-review-people"></dd></div>
+            <div><dt>Tarjeta infantil</dt><dd id="household-review-child"></dd></div>
+            <div><dt>Zona de precios</dt><dd id="household-review-area"></dd></div>
+            <div><dt>Objetivos</dt><dd id="household-review-budget"></dd></div>
+          </dl>
+          <p class="setup-privacy">Los gastos, las boletas y las compras de esta casa no se mezclarán con ningún otro hogar.</p>
+        </section>
+
+        <div class="setup-actions">
+          <button class="btn btn--ghost" id="household-back" type="button" hidden>Volver</button>
+          <button class="btn btn--primary" id="household-next" type="button">Continuar</button>
+          <button class="btn btn--primary" id="household-create" type="submit" hidden>Crear hogar separado</button>
+        </div>
+      </form>
+      <div id="household-join" class="household-join" hidden>
+        <p>Te invitaron a compartir una casa. Al aceptar, solamente verás los datos de ese hogar.</p>
+        <button class="btn btn--primary" id="household-join-btn" type="button">Aceptar invitación</button>
+      </div>
+      <p class="household-error" id="household-error" role="alert" hidden></p>
+      <button class="btn btn--ghost btn--small" id="household-signout" type="button">Entrar con otra cuenta</button>
+    </div>
+  </div>
+
   <!-- ================= SELECTOR DE USUARIO (primer uso) ================= -->
   <div class="user-overlay" id="user-overlay" hidden>
     <div class="user-card">
@@ -283,6 +357,7 @@
         <button class="btn btn--primary" id="settings-save">Guardar</button>
       </div>
       <button class="btn btn--ghost btn--small settings-notif" id="settings-notif">🔔 Activar notificaciones en este celular</button>
+      <button class="btn btn--ghost btn--small" id="settings-invite" hidden>Compartir invitación con mi pareja</button>
       <button class="btn btn--ghost btn--small settings-signout" id="settings-signout" hidden>Cerrar sesión</button>
     </div>
   </div>

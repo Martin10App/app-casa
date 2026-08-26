@@ -7,7 +7,7 @@
 
 import { $, $$, escapeHtml, uid, greeting, randomPhrase, fmtDate, fmtTime, timeAgo, groupBy, debounce, normalize, fmtMoney, compressImage } from './utils/helpers.js';
 import { ICONS, CATEGORIES, HOME_CARDS, pickHero, productVisual, productGradient, productGradientDark } from './utils/images.js';
-import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveReceiptBundle, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens } from './firebase.js';
+import { initData, subscribeItems, addItem, updateItem, completeItem, restoreItem, deleteItem, subscribeUsers, saveUsers, subscribeHome, saveHome, subscribePrices, savePrice, deletePrice, subscribeInventory, saveInventoryItem, deleteInventoryItem, subscribeCompras, saveReceiptBundle, deleteCompra, isCloud, authEnabled, onAuthChange, signIn, signOutUser, enablePush, onPushForeground, subscribeTokens, configureHousehold, resolveHousehold, createHousehold, joinHousehold } from './firebase.js';
 import { initModal, openModal } from './components/modal.js';
 import { initPrices, renderPrices, openPriceModal } from './components/prices.js';
 import { initInventory, renderInventory, openInventoryModal } from './components/inventory.js';
@@ -17,12 +17,13 @@ import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycl
 import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
 import { initSupermarket, renderSupermarket } from './components/supermarket.js';
 import { initBarcodeScanner } from './components/barcode.js';
-import { inferShoppingCategory } from './utils/shopping.mjs';
-import { loadSupers, nearestBranch, getLocation, fmtKm, distanceKm } from './utils/supers.js';
+import { inferShoppingCategory, comparableSavedPresentation, packageQuantityFromLabel } from './utils/shopping.mjs';
+import { loadSupers, nearestBranch, nearestArea, getLocation, fmtKm, distanceKm } from './utils/supers.js';
 import { toast } from './components/toast.js';
 import { requestNotifPermission, systemNotify, wasRemindedToday, markReminded } from './utils/notify.js';
 import { localISODate } from './utils/date.js';
 import { apiFetch } from './utils/api.js';
+import { legacyProfileFor, householdDraft, cardsForHousehold, inviteCodeFromLocation } from './utils/households.mjs';
 
 /* ================= Estado ================= */
 const DEFAULT_USERS = {
@@ -36,26 +37,18 @@ const VAPID_KEY  = 'BMgNBXFXY6duoOgmOEVtc90f8c4SUwbMmxSCBgy_pHe279qHEXH09Ijwa4bV
 const NOTIFY_API = 'https://app-casa-omega.vercel.app/api/notificar';
 const PRECIOS_API = 'https://app-casa-omega.vercel.app/api/precios-online';
 
-/* Correos de Google autorizados → a qué perfil corresponde cada uno.
-   Solo estas cuentas pueden entrar (la base queda cerrada a ellas).
-   ⚠️ Van en minúsculas. */
-const ALLOWED_USERS = {
-  'martinmolina10101@gmail.com': 'u1',
-  // Lucía puede tener varias cuentas → habilitamos todas las candidatas como u2
-  'luciia0295@gmail.com':        'u2',
-  'brumitta1608@gmail.com':      'u2',
-};
-
 const state = {
   items: [],
   prices: [],
   inventory: [],
   compras: [],           // boletas escaneadas con su desglose
   userLoc: null,         // { lat, lon } cuando el usuario comparte ubicación
+  areaName: 'Las Piedras',
   supers: null,          // catálogo de supermercados (para distancias)
   tokens: {},            // { u1: [tokens push], u2: [...] } para avisarle al otro
   home: { cards: {} },   // fotos personalizadas de tarjetas: { [cardId]: dataURL }
   users: structuredClone(DEFAULT_USERS),
+  household: { id: 'martin-lucia', name: 'Hogar de Martín y Lucía', legacy: true, inviteId: '' },
   me: localStorage.getItem('nh_me') || null,   // 'u1' | 'u2'
   view: 'home',
   activeCard: null,                            // tarjeta abierta en la vista de lista
@@ -66,6 +59,7 @@ const state = {
 
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const userOf = (id) => state.users[id] || { name: '—', emoji: '👤', bg: '#eee' };
+const householdCards = () => cardsForHousehold(HOME_CARDS, state.home);
 
 /** Avatar de un usuario: foto real si la cargó, si no su emoji. */
 function avatarHtml(id, cls = 'avatar-mini') {
@@ -132,6 +126,40 @@ const PRIO_COLOR = { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--r
 const PRIO_LABEL = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 
 const RADIO_KM = 15;   // solo recomendamos súper dentro de este radio
+const LEGACY_LOCATION = { lat: -34.73, lon: -56.22 };
+
+function locationStorageKey() {
+  return state.household.legacy ? 'nh_loc' : `nh_loc_${state.household.id}`;
+}
+
+function refreshAreaName() {
+  if (!state.userLoc || !state.supers) return;
+  state.areaName = nearestArea(state.userLoc.lat, state.userLoc.lon, state.supers)?.name || 'tu zona';
+}
+
+function latestPriceReference(name) {
+  const product = state.prices.find((row) => normalize(row.name) === normalize(name));
+  return [...(product?.entries || [])].sort((a, b) => Number(b.date || 0) - Number(a.date || 0))[0] || null;
+}
+
+function comparisonRequest(name) {
+  const reference = latestPriceReference(name);
+  let sizeLabel = reference?.sizeLabel || '';
+  let packageQuantity = Number(reference?.packageQuantity) || null;
+  if (!packageQuantity && Number(reference?.price) > 0 && Number(reference?.comparisonPrice) > 0) {
+    packageQuantity = Number(reference.price) / Number(reference.comparisonPrice);
+  }
+  if (!sizeLabel && reference?.comparisonUnit && packageQuantity) sizeLabel = `${String(+packageQuantity.toFixed(3)).replace('.', ',')} ${reference.comparisonUnit}`;
+  return { key: name, name, sizeLabel };
+}
+
+function comparisonLocation() {
+  const location = state.userLoc || (state.household.legacy ? LEGACY_LOCATION : null);
+  if (!location) return null;
+  // Para buscar comercios alcanza una precisión aproximada de 100 metros.
+  // No se envían al servidor más decimales de la ubicación del teléfono.
+  return { lat: +location.lat.toFixed(3), lon: +location.lon.toFixed(3) };
+}
 
 /**
  * Ranking de dónde comprar un producto: más baratos primero, teniendo en
@@ -144,7 +172,8 @@ function topPlaces(name, n = 3) {
   if (!prod || !prod.entries?.length) return [];
 
   const { userLoc, supers } = state;
-  let candidatos = prod.entries.map((e) => {
+  const reference = latestPriceReference(name);
+  let candidatos = prod.entries.filter((entry) => comparableSavedPresentation(reference, entry)).map((e) => {
     let km = null;
     if (userLoc && supers) {
       const near = nearestBranch(e.store, userLoc.lat, userLoc.lon, supers);
@@ -154,6 +183,8 @@ function topPlaces(name, n = 3) {
       store: e.store, price: e.price, km,
       comparisonPrice: e.comparisonPrice || null,
       comparisonUnit: e.comparisonUnit || null,
+      sizeLabel: e.sizeLabel || '',
+      packageQuantity: Number(e.packageQuantity) || packageQuantityFromLabel(e.sizeLabel, e.comparisonUnit),
       rankPrice: e.comparisonPrice || e.price,
     };
   });
@@ -179,12 +210,19 @@ function cheapestFor(name) {
 async function comparePrices(name) {
   const mine = topPlaces(name, 10).map((p) => ({ ...p, source: 'boleta' }));
 
+  // Un hogar nuevo debe activar su ubicación antes de consultar comercios:
+  // usar Las Piedras como respaldo mezclaría zonas.
+  if (!comparisonLocation()) return mine;
+
   let online = [];
   try {
-    const r = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(name)}`);
+    const r = await apiFetch(PRECIOS_API, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms: [comparisonRequest(name)], location: comparisonLocation(), area: state.areaName }),
+    });
     if (r.ok) {
       const d = await r.json();
-      online = (d.results || []).map((x) => ({
+      online = (d.queries?.[name]?.results || []).map((x) => ({
         store: x.store,
         price: x.price,
         comparisonPrice: x.comparisonPrice || null,
@@ -193,7 +231,7 @@ async function comparePrices(name) {
         detail: x.product,
         source: x.source || 'online',
         km: (state.userLoc && state.supers) ? (nearestBranch(x.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null) : null,
-      }));
+      })).filter((row) => row.km == null || row.km <= RADIO_KM);
     }
   } catch { /* sin online, seguimos con lo tuyo */ }
 
@@ -210,23 +248,31 @@ async function comparePrices(name) {
 async function compareShoppingPrices(names) {
   const unique = [...new Set(names.map((name) => String(name || '').trim()).filter(Boolean))];
   const output = {};
+  if (!comparisonLocation()) {
+    for (const term of unique) {
+      const results = topPlaces(term, 10).map((row) => ({ ...row, source: 'boleta', product: term }));
+      output[term] = { results, best: results[0] || null };
+    }
+    return output;
+  }
   for (let start = 0; start < unique.length; start += 6) {
-    const terms = unique.slice(start, start + 6);
+    const keys = unique.slice(start, start + 6);
+    const terms = keys.map(comparisonRequest);
     const response = await apiFetch(PRECIOS_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ terms }),
+      body: JSON.stringify({ terms, location: comparisonLocation(), area: state.areaName }),
     });
     if (!response.ok) throw new Error(`PRICE_API_${response.status}`);
     const data = await response.json();
-    for (const term of terms) {
+    for (const term of keys) {
       const live = (data.queries?.[term]?.results || []).map((row) => ({
         ...row,
         rankPrice: row.comparisonPrice || row.price,
         km: (state.userLoc && state.supers)
           ? (nearestBranch(row.store, state.userLoc.lat, state.userLoc.lon, state.supers)?.km ?? null)
           : null,
-      }));
+      })).filter((row) => row.km == null || row.km <= RADIO_KM);
       const own = topPlaces(term, 10).map((row) => ({ ...row, source: 'boleta', product: term }));
       const byStore = new Map();
       for (const row of [...live, ...own]) {
@@ -242,20 +288,34 @@ async function compareShoppingPrices(names) {
 
 /** Identifica un producto por EAN/UPC y completa la respuesta con precios comparables. */
 async function lookupBarcode(barcode) {
+  const location = comparisonLocation();
   const response = await apiFetch(PRECIOS_API, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ barcode }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ barcode, location, area: state.areaName }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `BARCODE_API_${response.status}`);
-  if (!data.product?.searchTerm) return { ...data, comparableResults: [] };
+  if (!location) return { ...data, exactResults: [], comparableResults: [] };
+
+  state.supers ||= await loadSupers();
+  const localRows = (rows = []) => rows.map((row) => ({
+    ...row,
+    km: nearestBranch(row.store, location.lat, location.lon, state.supers)?.km ?? null,
+  })).filter((row) => row.km != null && row.km <= RADIO_KM);
+  const exactResults = localRows(data.exactResults);
+  if (!data.product?.searchTerm || !data.product?.quantity) return { ...data, exactResults, comparableResults: [] };
 
   try {
-    const comparableResponse = await apiFetch(`${PRECIOS_API}?q=${encodeURIComponent(data.product.searchTerm)}`);
-    if (!comparableResponse.ok) return { ...data, comparableResults: [] };
+    const request = { key: data.product.searchTerm, name: data.product.searchTerm, sizeLabel: data.product.quantity };
+    const comparableResponse = await apiFetch(PRECIOS_API, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms: [request], location, area: state.areaName }),
+    });
+    if (!comparableResponse.ok) return { ...data, exactResults, comparableResults: [] };
     const comparableData = await comparableResponse.json();
-    return { ...data, comparableResults: comparableData.results || [] };
+    return { ...data, exactResults, comparableResults: localRows(comparableData.queries?.[request.key]?.results) };
   } catch {
-    return { ...data, comparableResults: [] };
+    return { ...data, exactResults, comparableResults: [] };
   }
 }
 
@@ -317,7 +377,8 @@ async function activarUbicacion() {
   try {
     state.supers = await loadSupers();
     state.userLoc = await getLocation();
-    localStorage.setItem('nh_loc', JSON.stringify(state.userLoc));   // la recordamos
+    localStorage.setItem(locationStorageKey(), JSON.stringify(state.userLoc));
+    refreshAreaName();
     toast('Listo: ahora te recomiendo por precio y cercanía 📍', { emoji: '📍', type: 'success' });
     rerender();
     return true;
@@ -384,7 +445,7 @@ function featuredBoletaHtml() {
 /* ================= Render: Inicio ================= */
 function renderHome() {
   const p = pending();
-  const cards = HOME_CARDS.map((card, i) => {
+  const cards = householdCards().map((card, i) => {
     // La de boletas va destacada aparte, no en la grilla
     if (card.special === 'purchases') return '';
     const count = card.special === 'prices'
@@ -413,7 +474,7 @@ function renderHome() {
 
 /* ================= Render: lista de una tarjeta ================= */
 function renderList() {
-  const card = HOME_CARDS.find((c) => c.id === state.activeCard);
+  const card = householdCards().find((c) => c.id === state.activeCard);
   if (!card) return;
   const items = pending().filter((it) => card.cats.includes(it.category));
   $('#list-title').textContent = card.label;
@@ -654,12 +715,13 @@ function detectChanges(items) {
 }
 
 /* ================= Notificaciones push (al otro) ================= */
-const otherUser = () => (state.me === 'u1' ? 'u2' : 'u1');
+const otherUser = () => Object.keys(state.users).find((id) => id !== state.me && !state.users[id]?.pending) || null;
 
 /** Le manda un aviso al celular del otro, aunque tenga la app cerrada.
     Es "dispará y seguí": si falla, no molesta al usuario. */
 function pushToOther(title, body = '') {
-  const tokens = state.tokens?.[otherUser()] || [];
+  const recipient = otherUser();
+  const tokens = recipient ? (state.tokens?.[recipient] || []) : [];
   if (!tokens.length || !authEnabled()) return;
   apiFetch(NOTIFY_API, {
     method: 'POST',
@@ -760,6 +822,7 @@ function showSettings() {
       </div>
     </div>`).join('');
   $('#settings-signout').hidden = !authEnabled();   // "Cerrar sesión" solo en modo nube
+  $('#settings-invite').hidden = state.household.legacy || !state.household.inviteId || (state.household.memberUids?.length || 0) >= 2;
   $('#settings-overlay').hidden = false;
 }
 
@@ -812,6 +875,161 @@ function showAuthGate(mode, email = '') {
   }
 }
 
+let pendingAuthUser = null;
+let resolvingSession = false;
+let householdSetupStep = 1;
+let householdSetupPhotos = { owner: '', partner: '', child: '' };
+let householdSetupLocation = null;
+const HOUSEHOLD_SETUP_STEPS = 4;
+
+function inviteUrl(inviteId) {
+  const url = new URL(location.href);
+  url.search = '';
+  url.hash = '';
+  url.searchParams.set('invite', inviteId);
+  return url.toString();
+}
+
+function enterHousehold(context) {
+  state.household = context;
+  state.userLoc = context.priceArea ? { lat: context.priceArea.lat, lon: context.priceArea.lon } : null;
+  state.areaName = context.legacy ? 'Las Piedras' : (context.priceArea?.name || 'tu zona');
+  state.me = context.profileId;
+  localStorage.setItem('nh_me', state.me);
+  configureHousehold(context);
+  $('#auth-overlay').hidden = true;
+  $('#household-overlay').hidden = true;
+  startApp();
+}
+
+function setupPhotoPreview(kind, source = '') {
+  const preview = $(`[data-photo-preview="${kind}"]`);
+  if (!preview) return;
+  preview.textContent = '';
+  if (source) {
+    const image = document.createElement('img');
+    image.src = source;
+    image.alt = '';
+    preview.appendChild(image);
+  } else {
+    preview.textContent = kind === 'child' ? '👧' : '👤';
+  }
+}
+
+function clearHouseholdError() {
+  const error = $('#household-error');
+  error.textContent = '';
+  error.hidden = true;
+}
+
+function updateHouseholdReview() {
+  $('#household-review-home').textContent = $('#household-name').value.trim() || '—';
+  $('#household-review-people').textContent = [$('#household-me').value.trim(), $('#household-partner').value.trim()].filter(Boolean).join(' y ') || '—';
+  $('#household-review-child').textContent = $('#household-child').value.trim() || '—';
+  $('#household-review-area').textContent = householdSetupLocation?.name || 'Se activará más adelante';
+  const ideal = Number($('#household-budget-ideal').value);
+  const limit = Number($('#household-budget-limit').value);
+  $('#household-review-budget').textContent = ideal > 0 && limit > ideal
+    ? `Ideal ${fmtMoney(ideal)} · máximo ${fmtMoney(limit)}` : '—';
+}
+
+function showHouseholdStep(step) {
+  householdSetupStep = Math.max(1, Math.min(HOUSEHOLD_SETUP_STEPS, step));
+  $$('[data-setup-step]').forEach((section) => { section.hidden = Number(section.dataset.setupStep) !== householdSetupStep; });
+  $$('[data-setup-dot]').forEach((dot) => dot.classList.toggle('is-active', Number(dot.dataset.setupDot) <= householdSetupStep));
+  $('#household-back').hidden = householdSetupStep === 1;
+  $('#household-next').hidden = householdSetupStep === HOUSEHOLD_SETUP_STEPS;
+  $('#household-create').hidden = householdSetupStep !== HOUSEHOLD_SETUP_STEPS;
+  if (householdSetupStep === HOUSEHOLD_SETUP_STEPS) updateHouseholdReview();
+  clearHouseholdError();
+  const heading = $(`[data-setup-step="${householdSetupStep}"] h3`);
+  heading?.setAttribute('tabindex', '-1');
+  requestAnimationFrame(() => heading?.focus?.({ preventScroll: true }));
+}
+
+function validateHouseholdStep(step) {
+  const required = step === 1
+    ? [$('#household-name'), $('#household-child')]
+    : step === 2 ? [$('#household-me'), $('#household-partner')] : [];
+  const empty = required.find((input) => !input.value.trim());
+  if (empty) {
+    householdError('Completá los datos marcados antes de continuar.');
+    empty.focus();
+    return false;
+  }
+  if (step === 3) {
+    const ideal = Number($('#household-budget-ideal').value);
+    const limit = Number($('#household-budget-limit').value);
+    if (!(ideal > 0) || !(limit > ideal)) {
+      householdError('El límite máximo debe ser mayor que el gasto ideal.');
+      (!(ideal > 0) ? $('#household-budget-ideal') : $('#household-budget-limit')).focus();
+      return false;
+    }
+  }
+  clearHouseholdError();
+  return true;
+}
+
+function resetHouseholdSetup(user) {
+  householdSetupPhotos = { owner: user.photo || '', partner: '', child: '' };
+  householdSetupLocation = null;
+  $('#household-me').value = user.name || '';
+  $('#household-partner').value = '';
+  $('#household-child').value = '';
+  $('#household-name').value = user.name ? `Hogar de ${user.name.split(' ')[0]}` : '';
+  $('#household-budget-ideal').value = '30000';
+  $('#household-budget-limit').value = '35000';
+  $('#household-location-status').textContent = 'Podés activarla ahora o hacerlo más adelante.';
+  $('#household-location').textContent = 'Usar mi ubicación';
+  $('#household-location').disabled = false;
+  $('#household-child-preview').textContent = 'la tarjeta infantil';
+  Object.entries(householdSetupPhotos).forEach(([kind, source]) => setupPhotoPreview(kind, source));
+  showHouseholdStep(1);
+}
+
+function showHouseholdSetup(user) {
+  pendingAuthUser = user;
+  const code = inviteCodeFromLocation(location);
+  const joining = Boolean(code);
+  $('#auth-overlay').hidden = true;
+  $('#household-overlay').hidden = false;
+  $('#household-form').hidden = joining;
+  $('#household-join').hidden = !joining;
+  $('#household-title').textContent = joining ? 'Sumate a su hogar' : 'Creá su hogar';
+  $('#household-sub').textContent = joining
+    ? 'La invitación conecta a la pareja, pero mantiene esta casa separada de todas las demás.'
+    : 'Sus gastos, compras, boletas y perfiles quedarán en una casa independiente.';
+  if (!joining) resetHouseholdSetup(user);
+  clearHouseholdError();
+}
+
+function householdError(message) {
+  const error = $('#household-error');
+  error.textContent = message;
+  error.hidden = false;
+}
+
+async function resolveSignedInUser(user) {
+  if (resolvingSession || appStarted) return;
+  resolvingSession = true;
+  try {
+    const legacyProfile = legacyProfileFor(user);
+    if (legacyProfile) {
+      enterHousehold({ id: 'martin-lucia', name: 'Hogar de Martín y Lucía', profileId: legacyProfile, legacy: true });
+      return;
+    }
+    const context = await resolveHousehold(user);
+    if (context) enterHousehold(context);
+    else showHouseholdSetup(user);
+  } catch (error) {
+    console.error('[Hogar]', error);
+    showAuthGate('denied', user.email || '');
+    $('#auth-sub').insertAdjacentText('beforeend', ' No pudimos comprobar a qué hogar pertenece.');
+  } finally {
+    resolvingSession = false;
+  }
+}
+
 /* ================= Arranque de datos (una sola vez, tras el login) ================= */
 let appStarted = false;
 function startApp() {
@@ -820,18 +1038,19 @@ function startApp() {
 
   // Ubicación recordada: se marca UNA vez y la app la recuerda para siempre
   try {
-    const savedLoc = JSON.parse(localStorage.getItem('nh_loc') || 'null');
+    const savedLoc = JSON.parse(localStorage.getItem(locationStorageKey()) || 'null');
     if (savedLoc && typeof savedLoc.lat === 'number') state.userLoc = savedLoc;
   } catch { /* nada */ }
   // Cargar el mapa de súper (para las distancias) apenas arranca
-  loadSupers().then((s) => { state.supers = s; if (state.userLoc) rerender(); });
+  loadSupers().then((s) => { state.supers = s; refreshAreaName(); if (state.userLoc) rerender(); });
   // Si ya diste permiso antes, refrescar la ubicación EN SILENCIO (sin pedir nada)
   if (navigator.permissions?.query) {
     navigator.permissions.query({ name: 'geolocation' }).then((p) => {
       if (p.state === 'granted') {
         getLocation().then((loc) => {
           state.userLoc = loc;
-          localStorage.setItem('nh_loc', JSON.stringify(loc));
+          localStorage.setItem(locationStorageKey(), JSON.stringify(loc));
+          refreshAreaName();
           rerender();
         }).catch(() => { /* seguimos con la guardada */ });
       }
@@ -839,7 +1058,8 @@ function startApp() {
   }
 
   subscribeUsers((users) => {
-    state.users = { ...structuredClone(DEFAULT_USERS), ...users };
+    state.users = state.household.legacy ? { ...structuredClone(DEFAULT_USERS), ...users } : { ...users };
+    if (authEnabled()) $('#user-overlay').hidden = true;
     renderAvatarBtn();
     rerender();
   });
@@ -862,6 +1082,7 @@ function startApp() {
 
   subscribeHome((home) => {
     state.home = { cards: {}, ...home };
+    if (state.home.cardLabels?.alma) CATEGORIES.alma.label = state.home.cardLabels.alma;
     if (state.view === 'home') renderHome();
     if (state.view === 'compras') renderCompras();
   });
@@ -887,7 +1108,10 @@ function startApp() {
   });
 
   // Usuario actual (en modo nube ya viene del login; en local, elegir)
-  if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
+  if (authEnabled()) {
+    // En nube el perfil viene ligado a la cuenta; esperamos la primera suscripción.
+    $('#user-overlay').hidden = true;
+  } else if (state.me && (DEFAULT_USERS[state.me] || state.users[state.me])) {
     renderAvatarBtn();
   } else {
     showUserPicker();
@@ -913,8 +1137,12 @@ async function boot() {
   // Capa de datos (nube o local)
   await initData();
 
+  // Vista local segura para revisar el alta sin escribir datos reales.
+  const onboardingPreview = ['localhost', '127.0.0.1'].includes(location.hostname)
+    && new URLSearchParams(location.search).get('preview') === 'onboarding';
+
   // Login: en modo nube exigimos cuenta de Google autorizada; en local se entra directo
-  if (authEnabled()) {
+  if (authEnabled() || onboardingPreview) {
     $('#auth-g-icon').innerHTML = ICONS.google;
     $('#auth-google').addEventListener('click', async () => {
       const btn = $('#auth-google');
@@ -926,24 +1154,138 @@ async function boot() {
       } finally { btn.disabled = false; }
     });
     $('#auth-signout').addEventListener('click', () => signOutUser());
+    $('#household-signout').addEventListener('click', () => signOutUser());
+    $('#household-next').addEventListener('click', () => {
+      if (validateHouseholdStep(householdSetupStep)) showHouseholdStep(householdSetupStep + 1);
+    });
+    $('#household-back').addEventListener('click', () => showHouseholdStep(householdSetupStep - 1));
+    $('#household-child').addEventListener('input', () => {
+      $('#household-child-preview').textContent = $('#household-child').value.trim() || 'la tarjeta infantil';
+    });
+    $$('[data-setup-photo]').forEach((button) => button.addEventListener('click', () => {
+      $(`#household-photo-${button.dataset.setupPhoto}`).click();
+    }));
+    for (const kind of ['owner', 'partner', 'child']) {
+      $(`#household-photo-${kind}`).addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const button = $(`[data-setup-photo="${kind}"]`);
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        clearHouseholdError();
+        try {
+          const photo = await compressImage(file, 360, 0.74);
+          householdSetupPhotos[kind] = photo;
+          setupPhotoPreview(kind, photo);
+        } catch (error) {
+          console.warn('[Foto configuración]', error);
+          householdError('No pudimos procesar esa foto. Probá con otra imagen.');
+        } finally {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          event.target.value = '';
+        }
+      });
+    }
+    $('#household-location').addEventListener('click', async () => {
+      const button = $('#household-location');
+      button.disabled = true;
+      button.textContent = 'Buscando…';
+      clearHouseholdError();
+      try {
+        state.supers = await loadSupers();
+        const locationValue = await getLocation();
+        const area = nearestArea(locationValue.lat, locationValue.lon, state.supers);
+        householdSetupLocation = { ...locationValue, name: area?.name || 'tu zona' };
+        $('#household-location-status').textContent = `${householdSetupLocation.name} · se compartirá como zona aproximada del hogar.`;
+        button.textContent = 'Ubicación lista ✓';
+      } catch (error) {
+        console.warn('[Ubicación configuración]', error);
+        $('#household-location-status').textContent = 'No se pudo activar. Podrán hacerlo después desde la app.';
+        button.textContent = 'Reintentar ubicación';
+      } finally {
+        button.disabled = false;
+      }
+    });
+    $('#household-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!pendingAuthUser) return;
+      if (householdSetupStep < HOUSEHOLD_SETUP_STEPS) {
+        if (validateHouseholdStep(householdSetupStep)) showHouseholdStep(householdSetupStep + 1);
+        return;
+      }
+      for (const step of [1, 2, 3]) {
+        if (!validateHouseholdStep(step)) {
+          showHouseholdStep(step);
+          validateHouseholdStep(step);
+          return;
+        }
+      }
+      const button = $('#household-create');
+      button.disabled = true;
+      button.textContent = 'Creando hogar…';
+      clearHouseholdError();
+      try {
+        const draft = householdDraft({
+          name: $('#household-name').value,
+          myName: $('#household-me').value,
+          partnerName: $('#household-partner').value,
+          childName: $('#household-child').value,
+          myPhoto: householdSetupPhotos.owner,
+          partnerPhoto: householdSetupPhotos.partner,
+          childPhoto: householdSetupPhotos.child,
+          expenseIdeal: $('#household-budget-ideal').value,
+          expenseLimit: $('#household-budget-limit').value,
+          priceArea: householdSetupLocation,
+        }, pendingAuthUser);
+        const context = await createHousehold(draft, pendingAuthUser);
+        if (householdSetupLocation) {
+          localStorage.setItem(`nh_loc_${context.id}`, JSON.stringify({ lat: householdSetupLocation.lat, lon: householdSetupLocation.lon }));
+        }
+        enterHousehold(context);
+        const link = inviteUrl(context.inviteId);
+        try { await navigator.clipboard.writeText(link); } catch { /* se puede compartir desde ajustes */ }
+        toast('Hogar creado. Copiamos la invitación para tu pareja.', { emoji: '🏠', type: 'success', duration: 6500 });
+      } catch (error) {
+        console.error('[Crear hogar]', error);
+        householdError('No pudimos crear el hogar. Revisá la conexión e intentá nuevamente.');
+      } finally { button.disabled = false; button.textContent = 'Crear hogar separado'; }
+    });
+    $('#household-join-btn').addEventListener('click', async () => {
+      if (!pendingAuthUser) return;
+      const button = $('#household-join-btn');
+      button.disabled = true;
+      button.textContent = 'Uniéndote al hogar…';
+      $('#household-error').hidden = true;
+      try {
+        const context = await joinHousehold(inviteCodeFromLocation(location), pendingAuthUser);
+        history.replaceState({}, '', location.pathname);
+        enterHousehold(context);
+        toast(`Ya estás dentro de ${escapeHtml(context.name || 'su hogar')}`, { emoji: '🏠', type: 'success' });
+      } catch (error) {
+        console.error('[Unirse al hogar]', error);
+        const message = error.message === 'household-full'
+          ? 'Este hogar ya tiene sus dos integrantes.'
+          : 'La invitación no existe, venció o ya fue utilizada.';
+        householdError(message);
+      } finally { button.disabled = false; button.textContent = 'Aceptar invitación'; }
+    });
     $('#auth-copylink').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(location.href); toast('Enlace copiado ✓ Pegalo en Safari', { emoji: '📋', type: 'success' }); }
       catch { toast('Copiá el enlace desde la barra de arriba', { emoji: '📋' }); }
     });
+
+    if (onboardingPreview) {
+      showHouseholdSetup({ uid: 'preview', email: 'preview@example.com', name: 'Sofía', photo: '' });
+      return;
+    }
 
     // Dentro de WhatsApp/Instagram el login no funciona → guiamos a abrir en el navegador
     if (isInAppBrowser()) { showInAppBrowserHelp(); return; }
 
     onAuthChange((user) => {
       if (!user) { showAuthGate('signin'); return; }
-      const email = (user.email || '').toLowerCase();
-      const mapped = ALLOWED_USERS[email];
-      if (!mapped) { showAuthGate('denied', email); return; }
-      // Cuenta autorizada
-      state.me = mapped;
-      localStorage.setItem('nh_me', mapped);
-      $('#auth-overlay').hidden = true;
-      startApp();
+      resolveSignedInUser(user);
     });
   } else {
     toast('Modo local: falta pegar la config de Firebase para sincronizar entre celulares (ver README)', { emoji: '📴', duration: 6500 });
@@ -1052,6 +1394,10 @@ async function boot() {
     getPurchases: () => state.compras,
     getPrices: () => state.prices,
     getMe: () => state.me,
+    getUsers: () => state.users,
+    getAreaName: () => state.areaName,
+    hasComparisonLocation: () => Boolean(comparisonLocation()),
+    activarUbicacion,
     cheapestFor,
     compareShoppingPrices,
     dealText,
@@ -1063,7 +1409,7 @@ async function boot() {
     notifyOther: (name, category) => pushToOther(`${userOf(state.me).name} agregó: ${name}`, CATEGORIES[category]?.label || 'Compras'),
   });
 
-  initBarcodeScanner({ lookupBarcode, addScannedItem });
+  initBarcodeScanner({ lookupBarcode, addScannedItem, getAreaName: () => state.areaName });
 
   // Libreta de precios
   initPrices({
@@ -1111,7 +1457,7 @@ async function boot() {
   $('#fab').addEventListener('click', () => {
     if (state.view === 'prices') { openPriceModal(); return; }
     if (state.view === 'inventory') { openInventoryModal(); return; }
-    const card = state.view === 'list' ? HOME_CARDS.find((c) => c.id === state.activeCard) : null;
+    const card = state.view === 'list' ? householdCards().find((c) => c.id === state.activeCard) : null;
     openModal(card ? card.cats[0] : null);
   });
 
@@ -1124,7 +1470,7 @@ async function boot() {
     // Incluye tanto las tarjetas normales (.home-card) como el banner destacado (.home-featured)
     const cardEl = e.target.closest('[data-card]');
     if (!cardEl) return;
-    const card = HOME_CARDS.find((c) => c.id === cardEl.dataset.card);
+    const card = householdCards().find((c) => c.id === cardEl.dataset.card);
     if (card?.special === 'purchases') { show('compras'); return; }
     if (card?.special === 'prices') { show('prices'); return; }
     if (card?.special === 'inventory') { show('inventory'); return; }
@@ -1181,6 +1527,15 @@ async function boot() {
   $('#btn-edit-users').addEventListener('click', () => { $('#user-overlay').hidden = true; showSettings(); });
   $('#settings-signout').addEventListener('click', () => signOutUser());
   $('#settings-notif').addEventListener('click', activarNotificaciones);
+  $('#settings-invite').addEventListener('click', async () => {
+    const link = inviteUrl(state.household.inviteId);
+    try {
+      if (navigator.share) await navigator.share({ title: state.household.name || 'Nuestro Hogar', text: 'Sumate a nuestro hogar en la app', url: link });
+      else { await navigator.clipboard.writeText(link); toast('Invitación copiada', { emoji: '📋', type: 'success' }); }
+    } catch (error) {
+      if (error.name !== 'AbortError') toast('No pudimos compartir. Probá nuevamente.', { emoji: '⚠️' });
+    }
+  });
 
   // Ajustes de usuarios
   $('#settings-cancel').addEventListener('click', () => { $('#settings-overlay').hidden = true; if (!authEnabled()) showUserPicker(); });

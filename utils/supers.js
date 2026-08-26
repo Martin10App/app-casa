@@ -61,6 +61,18 @@ export function nearestBranch(storeName, lat, lon, supers) {
   return best;
 }
 
+/** Localidad del establecimiento registrado más cercano a la ubicación. */
+export function nearestArea(lat, lon, supers) {
+  if (!supers?.length || lat == null || lon == null) return null;
+  let best = null;
+  for (const store of supers) {
+    if (!Number.isFinite(store.lat) || !Number.isFinite(store.lon)) continue;
+    const km = distanceKm(lat, lon, store.lat, store.lon);
+    if (!best || km < best.km) best = { name: store.ci || store.dp || 'tu zona', km, store };
+  }
+  return best;
+}
+
 /** Pide la ubicación del usuario (una vez). Devuelve {lat, lon} o lanza error. */
 export function getLocation() {
   return new Promise((resolve, reject) => {

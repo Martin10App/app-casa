@@ -40,7 +40,7 @@ function build() {
         <!-- Nombre -->
         <label class="field">
           <span class="field__label">¿Qué necesita la casa? <b class="req">*</b></span>
-          <input id="m-name" class="field__input" type="text" placeholder="Azúcar, papel higiénico, regalo para Alma…"
+          <input id="m-name" class="field__input" type="text" placeholder="Azúcar, papel higiénico, regalo para la nena…"
                  maxlength="80" autocomplete="off" enterkeyhint="done">
         </label>
 

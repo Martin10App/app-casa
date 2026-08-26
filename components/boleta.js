@@ -255,7 +255,7 @@ async function guardar() {
         entry: {
           id: oldEntry?.id || uid(), store, storeKey: normalize(store), price: it.unitPrice,
           comparisonPrice: it.comparisonPrice || null, comparisonUnit: it.comparisonUnit || null,
-          sizeLabel: it.sizeLabel || '', date: Date.now(), by: me,
+          sizeLabel: it.sizeLabel || '', packageQuantity: it.packageQuantity || null, date: Date.now(), by: me,
         },
       };
     });

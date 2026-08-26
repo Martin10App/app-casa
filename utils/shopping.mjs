@@ -76,6 +76,47 @@ function entryDate(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
+function packageShapeFromLabel(sizeLabel, unit) {
+  const text = normalize(sizeLabel).replace(',', '.');
+  const multi = /(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cc)/.exec(text);
+  const single = /(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cc)/.exec(text);
+  const units = /(?:x\s*)?(\d+)\s*(?:unidades?|uds?|un\.?|rollos?|sobres?|capsulas?|panales?)?\b/.exec(text);
+  const match = multi || single || (unit === 'unidad' ? units : null);
+  if (!match) return null;
+  const count = multi ? Number(match[1]) : 1;
+  if (!multi && !single) return { total: Number(match[1]), count: Number(match[1]), each: 1, unit: 'unidad' };
+  const amount = Number(match[multi ? 2 : 1]);
+  const rawUnit = match[multi ? 3 : 2];
+  const normalizedUnit = /^(kg|g)$/.test(rawUnit) ? 'kg' : 'l';
+  if (unit && normalizedUnit !== unit) return null;
+  const base = /^(g|ml|cc)$/.test(rawUnit) ? amount / 1000 : amount;
+  return { total: count * base, count, each: base, unit: normalizedUnit };
+}
+
+export function packageQuantityFromLabel(sizeLabel, unit) {
+  return packageShapeFromLabel(sizeLabel, unit)?.total || null;
+}
+
+export function comparableSavedPresentation(reference, candidate) {
+  const unit = reference?.comparisonUnit || null;
+  const referenceShape = packageShapeFromLabel(reference?.sizeLabel, unit);
+  const inferredReference = Number(reference?.price) > 0 && Number(reference?.comparisonPrice) > 0
+    ? Number(reference.price) / Number(reference.comparisonPrice) : null;
+  const expected = Number(reference?.packageQuantity) || referenceShape?.total || inferredReference;
+  // Si el historial viejo no trae tamaño, conservar sólo el precio de
+  // referencia; mezclarlo con otros envases sería una comparación inventada.
+  if (!unit || !(expected > 0)) return candidate === reference;
+  const candidateUnit = candidate?.comparisonUnit || null;
+  const candidateShape = packageShapeFromLabel(candidate?.sizeLabel, candidateUnit);
+  const inferredCandidate = Number(candidate?.price) > 0 && Number(candidate?.comparisonPrice) > 0
+    ? Number(candidate.price) / Number(candidate.comparisonPrice) : null;
+  const actual = Number(candidate?.packageQuantity) || candidateShape?.total || inferredCandidate;
+  if (candidateUnit !== unit || !(actual > 0)) return false;
+  if (Math.abs(actual - expected) > Math.max(0.01, expected * 0.02)) return false;
+  if (referenceShape && candidateShape && referenceShape.count !== candidateShape.count) return false;
+  return !referenceShape || !candidateShape || Math.abs(referenceShape.each - candidateShape.each) <= Math.max(0.01, referenceShape.each * 0.02);
+}
+
 export function purchaseRecommendations(purchases, savedPrices = [], limit = 36) {
   const products = new Map();
   const supermarketCategories = new Set(['frutas', 'verduras', 'carnes', 'lacteos', 'bebidas', 'limpieza', 'farmacia', 'mascotas', 'despensa', 'compras']);
@@ -98,7 +139,11 @@ export function purchaseRecommendations(purchases, savedPrices = [], limit = 36)
         current.name = name;
         current.category = item.category || current.category;
         current.lastDate = date;
-        if (price > 0) current.lastPrice = { store, price, date };
+        if (price > 0) {
+          current.lastPrice = { store, price, date, comparisonPrice: Number(item.comparisonPrice) || null, comparisonUnit: item.comparisonUnit || null };
+          if (item.sizeLabel) current.lastPrice.sizeLabel = item.sizeLabel;
+          if (Number(item.packageQuantity) > 0) current.lastPrice.packageQuantity = Number(item.packageQuantity);
+        }
       }
       if (isMacro && price > 0 && (!current.macroPrice || date >= current.macroPrice.date)) {
         current.macroPrice = {
@@ -106,6 +151,8 @@ export function purchaseRecommendations(purchases, savedPrices = [], limit = 36)
           comparisonPrice: Number(item.comparisonPrice) || null,
           comparisonUnit: item.comparisonUnit || null,
         };
+        if (item.sizeLabel) current.macroPrice.sizeLabel = item.sizeLabel;
+        if (Number(item.packageQuantity) > 0) current.macroPrice.packageQuantity = Number(item.packageQuantity);
       }
       products.set(key, current);
     }
@@ -127,9 +174,13 @@ export function purchaseRecommendations(purchases, savedPrices = [], limit = 36)
       if (!current.lastPrice || date >= current.lastDate) {
         current.lastDate = date;
         current.lastPrice = { store, price, date, source: 'boleta', comparisonPrice: Number(entry.comparisonPrice) || null, comparisonUnit: entry.comparisonUnit || null };
+        if (entry.sizeLabel) current.lastPrice.sizeLabel = entry.sizeLabel;
+        if (Number(entry.packageQuantity) > 0) current.lastPrice.packageQuantity = Number(entry.packageQuantity);
       }
       if (/macro\s*mercado/i.test(store) && (!current.macroPrice || date >= current.macroPrice.date)) {
         current.macroPrice = { store: 'Macromercado', price, date, source: 'boleta', card: 'Macropass', comparisonPrice: Number(entry.comparisonPrice) || null, comparisonUnit: entry.comparisonUnit || null };
+        if (entry.sizeLabel) current.macroPrice.sizeLabel = entry.sizeLabel;
+        if (Number(entry.packageQuantity) > 0) current.macroPrice.packageQuantity = Number(entry.packageQuantity);
       }
     }
     products.set(key, current);

@@ -59,14 +59,37 @@ async function createCloudAdapter() {
   });
   const auth = authMod.getAuth(app);
 
-  const itemsCol   = fs.collection(db, 'items');
-  const pricesCol  = fs.collection(db, 'prices');
-  const invCol     = fs.collection(db, 'inventory');
-  const comprasCol = fs.collection(db, 'compras');
-  const homeCardsCol = fs.collection(db, 'homeCards');
-  const usersDoc  = fs.doc(db, 'meta', 'users');
-  const homeDoc   = fs.doc(db, 'meta', 'home');
-  const tokensDoc = fs.doc(db, 'meta', 'tokens');
+  let itemsCol;
+  let pricesCol;
+  let invCol;
+  let comprasCol;
+  let homeCardsCol;
+  let usersDoc;
+  let homeDoc;
+  let tokensDoc;
+  let householdContext = null;
+
+  function configureHousehold(context) {
+    householdContext = context;
+    const prefix = context?.legacy ? null : ['households', context.id];
+    const collectionRef = (name) => prefix
+      ? fs.collection(db, ...prefix, name)
+      : fs.collection(db, name);
+    const documentRef = (collectionName, documentName) => prefix
+      ? fs.doc(db, ...prefix, collectionName, documentName)
+      : fs.doc(db, collectionName, documentName);
+    itemsCol = collectionRef('items');
+    pricesCol = collectionRef('prices');
+    invCol = collectionRef('inventory');
+    comprasCol = collectionRef('compras');
+    homeCardsCol = collectionRef('homeCards');
+    usersDoc = documentRef('meta', 'users');
+    homeDoc = documentRef('meta', 'home');
+    tokensDoc = documentRef('meta', 'tokens');
+  }
+
+  // Compatibilidad: hasta resolver la sesión, las referencias conservan la casa histórica.
+  configureHousehold({ id: 'martin-lucia', legacy: true });
 
   return {
     name: 'nube',
@@ -103,6 +126,71 @@ async function createCloudAdapter() {
 
     async getAuthToken() {
       return auth.currentUser ? auth.currentUser.getIdToken() : null;
+    },
+
+    getHouseholdId() {
+      return householdContext?.id || '';
+    },
+
+    configureHousehold,
+
+    async resolveHousehold(user) {
+      const account = await fs.getDoc(fs.doc(db, 'accounts', user.uid));
+      if (!account.exists()) return null;
+      const data = account.data();
+      const home = await fs.getDoc(fs.doc(db, 'households', data.householdId));
+      if (!home.exists()) return null;
+      return { id: data.householdId, profileId: data.profileId || user.uid, legacy: false, ...home.data() };
+    },
+
+    async createHousehold(draft, user) {
+      const homeRef = fs.doc(fs.collection(db, 'households'));
+      const inviteRef = fs.doc(fs.collection(db, 'invites'));
+      const ownerProfile = { ...draft.profiles.owner, email: user.email || '', uid: user.uid };
+      const profiles = { [user.uid]: ownerProfile, partner: draft.profiles.partner };
+      const batch = fs.writeBatch(db);
+      batch.set(homeRef, {
+        name: draft.name,
+        memberUids: [user.uid],
+        ownerUid: user.uid,
+        inviteId: inviteRef.id,
+        ...(draft.priceArea ? { priceArea: draft.priceArea } : {}),
+        createdAt: fs.serverTimestamp(),
+      });
+      batch.set(fs.doc(homeRef, 'meta', 'users'), profiles);
+      batch.set(fs.doc(homeRef, 'meta', 'home'), { cardLabels: { alma: draft.childName }, expenseBudget: draft.expenseBudget });
+      if (draft.childPhoto) batch.set(fs.doc(homeRef, 'homeCards', 'alma'), { photo: draft.childPhoto, updatedAt: fs.serverTimestamp() });
+      batch.set(fs.doc(db, 'accounts', user.uid), { householdId: homeRef.id, profileId: user.uid });
+      batch.set(inviteRef, {
+        householdId: homeRef.id, householdName: draft.name, partnerProfile: draft.profiles.partner,
+        ...(draft.priceArea ? { priceArea: draft.priceArea } : {}),
+        createdBy: user.uid, active: true, createdAt: fs.serverTimestamp(),
+      });
+      await batch.commit();
+      return { id: homeRef.id, profileId: user.uid, legacy: false, name: draft.name, inviteId: inviteRef.id, memberUids: [user.uid], priceArea: draft.priceArea };
+    },
+
+    async joinHousehold(inviteId, user) {
+      const inviteRef = fs.doc(db, 'invites', inviteId);
+      const invite = await fs.getDoc(inviteRef);
+      if (!invite.exists() || invite.data().active !== true) throw new Error('invite-not-found');
+      const householdId = invite.data().householdId;
+      const inviteData = invite.data();
+      const homeRef = fs.doc(db, 'households', householdId);
+      const usersRef = fs.doc(homeRef, 'meta', 'users');
+      const pending = inviteData.partnerProfile || { name: user.name || 'Mi pareja', emoji: '👤', bg: '#ffe3dc' };
+      const joinedProfile = { ...pending, pending: false, uid: user.uid, email: user.email || '' };
+      if (!joinedProfile.photo && user.photo) joinedProfile.photo = user.photo;
+      const batch = fs.writeBatch(db);
+      batch.update(homeRef, { memberUids: fs.arrayUnion(user.uid) });
+      batch.set(usersRef, {
+        partner: fs.deleteField(),
+        [user.uid]: joinedProfile,
+      }, { merge: true });
+      batch.set(fs.doc(db, 'accounts', user.uid), { householdId, profileId: user.uid });
+      batch.update(inviteRef, { active: false, usedBy: user.uid, usedAt: fs.serverTimestamp() });
+      await batch.commit();
+      return { id: householdId, profileId: user.uid, legacy: false, name: inviteData.householdName || 'Nuestro Hogar', memberUids: [inviteData.createdBy, user.uid], priceArea: inviteData.priceArea || null };
     },
 
     subscribeItems(cb) {
@@ -384,6 +472,11 @@ function createLocalAdapter() {
     async signIn() {},
     async signOutUser() {},
     async getAuthToken() { return null; },
+    getHouseholdId() { return 'local'; },
+    configureHousehold() {},
+    async resolveHousehold() { return { id: 'local', profileId: null, legacy: true }; },
+    async createHousehold() { throw new Error('modo-local'); },
+    async joinHousehold() { throw new Error('modo-local'); },
 
     /* ---- Push: no aplica en modo local ---- */
     pushSupported() { return false; },
@@ -567,6 +660,11 @@ export const onAuthChange   = (cb)          => adapter.onAuthChange(cb);
 export const signIn         = ()            => adapter.signIn();
 export const signOutUser    = ()            => adapter.signOutUser();
 export const getAuthToken   = ()            => adapter.getAuthToken();
+export const getHouseholdId = ()            => adapter.getHouseholdId();
+export const configureHousehold = (context) => adapter.configureHousehold(context);
+export const resolveHousehold = (user)      => adapter.resolveHousehold(user);
+export const createHousehold = (draft, user) => adapter.createHousehold(draft, user);
+export const joinHousehold   = (code, user)  => adapter.joinHousehold(code, user);
 export const pushSupported     = ()               => adapter.pushSupported();
 export const enablePush        = (vapid, userId)  => adapter.enablePush(vapid, userId);
 export const onPushForeground  = (cb)             => adapter.onPushForeground(cb);
