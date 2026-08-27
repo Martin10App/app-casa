@@ -31,7 +31,8 @@ export function householdDraft(values = {}, user = {}) {
   const childName = cleanHouseholdText(values.childName, 'Niños');
   const ideal = Number(values.expenseIdeal);
   const limit = Number(values.expenseLimit);
-  const expenseBudget = ideal > 0 && limit > ideal ? { ideal, limit } : { ideal: 30000, limit: 35000 };
+  const expenseBudget = ideal > 0 && limit > ideal ? { ideal, limit } : null;
+  const cycleStartDay = Math.max(1, Math.min(28, Math.trunc(Number(values.cycleStartDay)) || 1));
   const priceArea = Number.isFinite(values.priceArea?.lat) && Number.isFinite(values.priceArea?.lon)
     ? {
       name: cleanHouseholdText(values.priceArea.name, 'tu zona'),
@@ -43,6 +44,7 @@ export function householdDraft(values = {}, user = {}) {
     childName,
     childPhoto: cleanPhoto(values.childPhoto),
     expenseBudget,
+    expenseSettings: { configured: true, cycleStartDay, cards: [] },
     priceArea,
     profiles: {
       owner: { name: myName, emoji: '👤', bg: '#dbe7ff', ...(cleanPhoto(values.myPhoto) ? { photo: cleanPhoto(values.myPhoto) } : {}) },

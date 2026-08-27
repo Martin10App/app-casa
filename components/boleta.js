@@ -16,7 +16,7 @@ import { ICONS, CATEGORIES, productVisual, productGradient, productGradientDark 
 import { toast } from './toast.js';
 import { localISODate } from '../utils/date.js';
 import { apiFetch } from '../utils/api.js';
-import { PAYMENT_METHODS, EXPENSE_CATEGORIES } from '../utils/expenses.mjs';
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES, normalizeExpenseSettings, paymentMethodEntries, cardForPayment, buildInstallmentSchedule } from '../utils/expenses.mjs';
 
 const BOLETA_API = 'https://app-casa-omega.vercel.app/api/boleta';
 
@@ -24,6 +24,8 @@ const BOLETA_API = 'https://app-casa-omega.vercel.app/api/boleta';
 let deps = null;
 let overlay = null;
 let lectura = null;   // { store, date, total, items:[...] }
+function expenseSettings() { return normalizeExpenseSettings(deps?.getExpenseSettings?.(), { legacy: Boolean(deps?.isLegacy?.()) }); }
+function paymentOptions() { return paymentMethodEntries(expenseSettings()).filter(([key]) => key !== 'unknown').map(([key, value]) => `<option value="${key}">${escapeHtml(value.label)}</option>`).join(''); }
 
 /* ============================================================
    Overlay
@@ -75,7 +77,7 @@ function build() {
           <label class="boleta-field">
             <span>Forma de pago</span>
             <select id="bol-payment" class="field__input">
-              ${Object.entries(PAYMENT_METHODS).filter(([key]) => key !== 'unknown').map(([key, value]) => `<option value="${key}">${value.label}</option>`).join('')}
+              ${paymentOptions()}
             </select>
           </label>
           <label class="boleta-field">
@@ -85,6 +87,7 @@ function build() {
             </select>
           </label>
         </div>
+        <label class="boleta-field" id="bol-installments-field" hidden><span>Cuotas</span><input id="bol-installments" class="field__input" type="number" min="1" max="60" value="1"><small id="bol-card-preview"></small></label>
         <div class="boleta-items" id="bol-items"></div>
         <p class="boleta-aviso" id="bol-aviso"></p>
         <div class="voice-actions">
@@ -113,6 +116,7 @@ function build() {
   $('#bol-error-camera', overlay).addEventListener('click', () => pickPhoto('camera'));
   $('#bol-error-gallery', overlay).addEventListener('click', () => pickPhoto('gallery'));
   $('#bol-save', overlay).addEventListener('click', guardar);
+  for (const id of ['bol-payment', 'bol-date', 'bol-total', 'bol-installments']) $('#'+id, overlay).addEventListener('input', updateCardPreview);
 
   // Borrar un renglón de la revisión
   $('#bol-items', overlay).addEventListener('click', (e) => {
@@ -172,7 +176,10 @@ function renderReview() {
   $('#bol-store', overlay).value = lectura.store || '';
   $('#bol-date', overlay).value = lectura.date || localISODate();
   $('#bol-total', overlay).value = lectura.total || '';
-  $('#bol-payment', overlay).value = lectura.paymentMethod || 'master_brou';
+  $('#bol-payment', overlay).innerHTML = paymentOptions();
+  $('#bol-payment', overlay).value = lectura.paymentMethod || expenseSettings().cards[0]?.id || 'debit';
+  $('#bol-installments', overlay).value = lectura.installments || 1;
+  updateCardPreview();
   $('#bol-expense-category', overlay).value = lectura.expenseCategory || 'supermercado';
 
   $('#bol-items', overlay).innerHTML = lectura.items.map((it, i) => {
@@ -199,6 +206,16 @@ function renderReview() {
   stage('bol-review');
 }
 
+function updateCardPreview() {
+  const card = cardForPayment($('#bol-payment', overlay)?.value, expenseSettings());
+  const field = $('#bol-installments-field', overlay);
+  if (!field) return;
+  field.hidden = !card;
+  if (!card) return;
+  const schedule = buildInstallmentSchedule({ purchaseDate: $('#bol-date', overlay).value || localISODate(), total: Number($('#bol-total', overlay).value) || 0, installments: Number($('#bol-installments', overlay).value) || 1, card });
+  $('#bol-card-preview', overlay).textContent = `Primera cuota: ${schedule[0].date} · ${fmtMoney(schedule[0].amount)}`;
+}
+
 /** Compara el precio nuevo con lo que ya sabíamos de ese producto */
 function compararConHistorial(name, price, store) {
   if (!price) return null;
@@ -220,6 +237,8 @@ async function guardar() {
   const date = $('#bol-date', overlay).value || localISODate();
   const total = parseFloat($('#bol-total', overlay).value) || 0;
   const paymentMethod = $('#bol-payment', overlay).value;
+  const card = cardForPayment(paymentMethod, expenseSettings());
+  const installments = card ? Math.max(1, Math.min(60, Number($('#bol-installments', overlay).value) || 1)) : 1;
   const expenseCategory = $('#bol-expense-category', overlay).value;
   if (!store) { toast('¿En qué lugar compraste?', { emoji: '🏪' }); $('#bol-store', overlay).focus(); return; }
   if (!lectura.items.length) { toast('No quedó ningún producto', { emoji: '🤷' }); return; }
@@ -264,17 +283,19 @@ async function guardar() {
     const inventory = [...new Map(inventoryRows.map((item) => [item.id, item])).values()];
     const prices = [...new Map(priceRows.map((product) => [product.id, product])).values()];
 
-    const expense = total > 0 ? {
-      id: `receipt_${receiptId}`,
-      name: `Compra en ${store}`,
+    const schedule = card ? buildInstallmentSchedule({ purchaseDate: date, total, installments, card }) : [{ number: 1, count: 1, amount: total, date }];
+    const purchases = schedule.map((part, index) => ({ id: index ? `${receiptId}_q${part.number}` : receiptId, source: 'receipt', store, date: part.date, purchaseDate: date, total: part.amount, items: index ? [] : lectura.items, paymentMethod, expenseCategory, installmentNumber: part.number, installmentCount: part.count, createdBy: me }));
+    const expenses = total > 0 ? schedule.map((part, index) => ({
+      id: `receipt_${purchases[index].id}`,
+      name: `Compra en ${store}${part.count > 1 ? ` · cuota ${part.number}/${part.count}` : ''}`,
       detail: `${lectura.items.length} producto${lectura.items.length === 1 ? '' : 's'} · boleta escaneada`,
-      category: 'gastos', priority: 'media', qty: 1, amount: total, dueDate: date, photo: null,
-      status: 'completado', completedBy: me, completedAt: Date.now(), createdBy: me, sourceReceiptId: receiptId,
-    } : null;
+      category: 'gastos', priority: 'media', qty: 1, amount: part.amount, dueDate: part.date, photo: null,
+      status: 'completado', completedBy: me, completedAt: Date.now(), createdBy: me, sourceReceiptId: purchases[index].id,
+    })) : [];
 
     const result = await deps.saveReceiptBundle({
-      purchase: { id: receiptId, source: 'receipt', store, date, total, items: lectura.items, paymentMethod, expenseCategory, createdBy: me },
-      inventory, prices, expense,
+      purchase: purchases[0], additionalPurchases: purchases.slice(1),
+      inventory, prices, expense: expenses[0] || null, additionalExpenses: expenses.slice(1),
     });
     if (result?.duplicate) {
       toast('Esta boleta ya estaba guardada', { emoji: '🧾', duration: 5000 });

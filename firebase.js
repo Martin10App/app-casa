@@ -158,7 +158,11 @@ async function createCloudAdapter() {
         createdAt: fs.serverTimestamp(),
       });
       batch.set(fs.doc(homeRef, 'meta', 'users'), profiles);
-      batch.set(fs.doc(homeRef, 'meta', 'home'), { cardLabels: { alma: draft.childName }, expenseBudget: draft.expenseBudget });
+      batch.set(fs.doc(homeRef, 'meta', 'home'), {
+        cardLabels: { alma: draft.childName },
+        expenseBudget: draft.expenseBudget,
+        expenseSettings: draft.expenseSettings,
+      });
       if (draft.childPhoto) batch.set(fs.doc(homeRef, 'homeCards', 'alma'), { photo: draft.childPhoto, updatedAt: fs.serverTimestamp() });
       batch.set(fs.doc(db, 'accounts', user.uid), { householdId: homeRef.id, profileId: user.uid });
       batch.set(inviteRef, {
@@ -365,6 +369,10 @@ async function createCloudAdapter() {
         const purchaseData = { ...bundle.purchase };
         delete purchaseData.id;
         tx.set(receiptRef, { ...purchaseData, createdAt: fs.serverTimestamp() });
+        for (const purchase of bundle.additionalPurchases || []) {
+          const { id, ...data } = purchase;
+          tx.set(fs.doc(comprasCol, id), { ...data, createdAt: fs.serverTimestamp() });
+        }
 
         bundle.inventory.forEach((item, index) => {
           const current = inventorySnaps[index].exists() ? inventorySnaps[index].data() : {};
@@ -382,6 +390,10 @@ async function createCloudAdapter() {
 
         if (bundle.expense) {
           const { id, ...data } = bundle.expense;
+          tx.set(fs.doc(itemsCol, id), { ...data, createdAt: fs.serverTimestamp() });
+        }
+        for (const expense of bundle.additionalExpenses || []) {
+          const { id, ...data } = expense;
           tx.set(fs.doc(itemsCol, id), { ...data, createdAt: fs.serverTimestamp() });
         }
         return { duplicate: false };
@@ -575,6 +587,7 @@ function createLocalAdapter() {
       const now = Date.now();
 
       compras.push({ ...bundle.purchase, createdAt: now });
+      for (const purchase of bundle.additionalPurchases || []) compras.push({ ...purchase, createdAt: now });
       for (const incoming of bundle.inventory) {
         const index = inventory.findIndex((item) => item.id === incoming.id);
         const value = { ...(index >= 0 ? inventory[index] : {}), ...incoming, updatedAt: now };
@@ -589,6 +602,7 @@ function createLocalAdapter() {
         if (index >= 0) prices[index] = product; else prices.push(product);
       }
       if (bundle.expense) items.push({ ...bundle.expense, createdAt: now });
+      for (const expense of bundle.additionalExpenses || []) items.push({ ...expense, createdAt: now });
 
       write(KEY_COMPRAS, compras); write(KEY_INV, inventory); write(KEY_PRICES, prices); write(KEY_ITEMS, items);
       emitCompras(); emitInv(); emitPrices(); emitItems();

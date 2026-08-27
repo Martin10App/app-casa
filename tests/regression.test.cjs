@@ -104,10 +104,11 @@ test('households keep legacy data stable and customize each child card independe
   const draft = households.householdDraft({
     name: 'Casa de Sofía y Diego', myName: 'Sofía', partnerName: 'Diego', childName: 'Julieta',
     myPhoto: photo, partnerPhoto: photo, childPhoto: photo,
-    expenseIdeal: 42000, expenseLimit: 50000,
+    expenseIdeal: 42000, expenseLimit: 50000, cycleStartDay: 12,
     priceArea: { name: 'Atlántida', lat: -34.771234, lon: -55.758456 },
   });
   assert.deepEqual(draft.expenseBudget, { ideal: 42000, limit: 50000 });
+  assert.deepEqual(draft.expenseSettings, { configured: true, cycleStartDay: 12, cards: [] });
   assert.deepEqual(draft.priceArea, { name: 'Atlántida', lat: -34.771, lon: -55.758 });
   assert.equal(draft.profiles.owner.photo, photo);
   assert.equal(draft.profiles.partner.photo, photo);
@@ -124,6 +125,9 @@ test('new-home onboarding collects family photos, location and expense goals in 
   assert.match(html, /data-setup-photo="child"/);
   assert.match(html, /id="household-budget-ideal"/);
   assert.match(html, /id="household-budget-limit"/);
+  assert.match(html, /id="household-cycle-start"/);
+  assert.doesNotMatch(html, /id="household-budget-ideal"[^>]*value="30000"/);
+  assert.doesNotMatch(html, /id="household-budget-limit"[^>]*value="35000"/);
   assert.match(html, /id="household-location"/);
   assert.match(app, /compressImage\(file, 360, 0\.74\)/);
   assert.match(app, /HOUSEHOLD_SETUP_STEPS = 4/);
@@ -137,6 +141,7 @@ test('cloud storage uses household subcollections while preserving the legacy ro
   assert.match(source, /context\?\.legacy \? null : \['households', context\.id\]/);
   assert.match(source, /configureHousehold\(\{ id: 'martin-lucia', legacy: true \}\)/);
   assert.match(source, /expenseBudget: draft\.expenseBudget/);
+  assert.match(source, /expenseSettings: draft\.expenseSettings/);
   assert.match(source, /homeCards', 'alma'/);
   assert.match(rules, /householdMemberAfter/);
   assert.match(rules, /legacyMember/);
@@ -176,9 +181,12 @@ test('camera and gallery are separate receipt inputs', () => {
   assert.match(source, /pickPhoto\('gallery'\)/);
 });
 
-test('card cycles run from day 24 through day 23 and reports stay separated', async () => {
+test('each household can choose its own monthly expense cycle', async () => {
   const expenses = await import('../utils/expenses.mjs');
   assert.deepEqual(expenses.billingCycleFor('2026-08-12'), { start: '2026-07-24', end: '2026-08-23' });
+  assert.deepEqual(expenses.billingCycleFor('2026-08-12', 1), { start: '2026-08-01', end: '2026-08-31' });
+  assert.deepEqual(expenses.billingCycleFor('2026-08-12', 10), { start: '2026-08-10', end: '2026-09-09' });
+  assert.deepEqual(expenses.billingCycleFor('2026-08-05', 10), { start: '2026-07-10', end: '2026-08-09' });
   assert.deepEqual(expenses.billingCycleFor('2026-08-24'), { start: '2026-08-24', end: '2026-09-23' });
   assert.deepEqual(expenses.shiftBillingCycle({ start: '2026-12-24', end: '2027-01-23' }, 1), { start: '2027-01-24', end: '2027-02-23' });
 
@@ -236,7 +244,36 @@ test('historical expenses without payment metadata belong to Master BROU', async
     { date: '2026-08-12', store: 'Leñería', total: 500, paymentMethod: 'debit' },
   ], { start: '2026-07-24', end: '2026-08-23' });
   assert.deepEqual(report.payments.map((row) => [row.key, row.total]), [['master_brou', 2500], ['debit', 500]]);
-  assert.equal(expenses.paymentMethodFor({}), 'master_brou');
+  assert.equal(expenses.paymentMethodFor({}, expenses.normalizeExpenseSettings(null, { legacy: true })), 'master_brou');
+  assert.equal(expenses.paymentMethodFor({}, expenses.normalizeExpenseSettings(null, { legacy: false })), 'unknown');
+});
+
+test('new homes start without personal cards while the legacy home keeps its history', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  assert.deepEqual(expenses.normalizeExpenseSettings(null, { legacy: false }), { configured: false, cycleStartDay: 1, cards: [] });
+  const legacy = expenses.normalizeExpenseSettings(null, { legacy: true });
+  assert.equal(legacy.cycleStartDay, 24);
+  assert.deepEqual(legacy.cards.map((card) => card.name), ['Master BROU']);
+  assert.ok(!expenses.paymentMethodEntries({ configured: true, cycleStartDay: 1, cards: [] }).some(([key]) => key === 'master_brou'));
+  const emptyReport = expenses.analyzeExpenses([{ date: '2026-08-02', total: 10 }], { start: '2026-08-01', end: '2026-08-31' }, expenses.normalizeExpenseSettings(null));
+  assert.deepEqual(emptyReport.payments, [{ key: 'unknown', total: 10 }]);
+  const safe = expenses.normalizeExpenseSettings({ configured: true, cycleStartDay: 1, cards: [{ name: 'Débito', closingDay: 10, dueDay: 20 }, { name: 'Débito', closingDay: 11, dueDay: 21 }] });
+  assert.equal(new Set(safe.cards.map((card) => card.id)).size, 2);
+  assert.ok(safe.cards.every((card) => card.id.startsWith('card_')));
+});
+
+test('credit-card closing dates place installments in their real payment months', async () => {
+  const expenses = await import('../utils/expenses.mjs');
+  const visa = { id: 'visa', name: 'Visa', closingDay: 10, dueDay: 25 };
+  assert.equal(expenses.statementDueDate('2026-08-05', visa), '2026-08-25');
+  assert.equal(expenses.statementDueDate('2026-08-11', visa), '2026-09-25');
+  const oca = { id: 'oca', name: 'OCA', closingDay: 25, dueDay: 10 };
+  assert.equal(expenses.statementDueDate('2026-08-20', oca), '2026-09-10');
+  assert.equal(expenses.statementDueDate('2026-08-26', oca), '2026-10-10');
+  const schedule = expenses.buildInstallmentSchedule({ purchaseDate: '2026-08-05', total: 100, installments: 3, card: visa });
+  assert.deepEqual(schedule.map((row) => row.date), ['2026-08-25', '2026-09-25', '2026-10-25']);
+  assert.equal(schedule.reduce((sum, row) => sum + row.amount, 0), 100);
+  assert.deepEqual(schedule.map((row) => row.amount), [33.34, 33.33, 33.33]);
 });
 
 test('quick supermarket entry infers aisles and groups a useful route', async () => {
