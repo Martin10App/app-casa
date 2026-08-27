@@ -14,7 +14,7 @@ import { initInventory, renderInventory, openInventoryModal } from './components
 import { initVoice, openVoice } from './components/voice.js';
 import { initBoleta, openBoleta } from './components/boleta.js';
 import { initExpenses, renderExpenseDashboard, openManualExpense, getExpenseCycle } from './components/expenses.js';
-import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor } from './utils/expenses.mjs';
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES, isInCycle, paymentMethodFor, normalizeExpenseSettings, paymentMethodEntries } from './utils/expenses.mjs';
 import { initSupermarket, renderSupermarket } from './components/supermarket.js';
 import { initBarcodeScanner } from './components/barcode.js';
 import { inferShoppingCategory, comparableSavedPresentation, packageQuantityFromLabel } from './utils/shopping.mjs';
@@ -56,6 +56,12 @@ const state = {
   statusMap: new Map(),                        // id → status previo (para notificaciones)
   firstSnapshot: true,
 };
+
+function expenseSettingsForHome() { return normalizeExpenseSettings(state.home.expenseSettings, { legacy: Boolean(state.household.legacy) }); }
+function expensePaymentLabel(purchase) {
+  const entries = Object.fromEntries(paymentMethodEntries(expenseSettingsForHome()));
+  return entries[paymentMethodFor(purchase, expenseSettingsForHome())]?.short || PAYMENT_METHODS.unknown.short;
+}
 
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const userOf = (id) => state.users[id] || { name: '—', emoji: '👤', bg: '#eee' };
@@ -436,7 +442,7 @@ function featuredBoletaHtml() {
       <span class="home-featured__badge">✨ Control mensual</span>
       <span class="home-featured__body">
         <span class="home-featured__title">💳 Tus gastos, claros</span>
-        <span class="home-featured__sub">Boletas, gastos manuales y el ciclo de tu tarjeta del 24 al 23.</span>
+        <span class="home-featured__sub">${state.household.legacy ? 'Boletas, gastos manuales y tu ciclo histórico del 24 al 23.' : 'Boletas, gastos manuales, períodos propios y cuotas de tarjetas.'}</span>
         <span class="home-featured__cta">${ICONS.receipt} ${nComp ? `${nComp} movimiento${nComp === 1 ? '' : 's'} · ver análisis` : 'Abrir gastos'}</span>
       </span>
     </button>`;
@@ -578,7 +584,7 @@ function renderCompras() {
               <div class="compra-card__info">
                 <div class="compra-card__store">${c.source === 'manual' ? ICONS.edit : ICONS.receipt} ${escapeHtml(c.store || 'Sin lugar')}</div>
                 <div class="compra-card__meta">${fmtDate(c.date + 'T12:00')} · ${items.length} concepto${items.length === 1 ? '' : 's'} · ${by.emoji} ${escapeHtml(by.name)}</div>
-                <div class="compra-card__tags"><span>${escapeHtml(PAYMENT_METHODS[paymentMethodFor(c)].short)}</span><span>${escapeHtml(EXPENSE_CATEGORIES[c.expenseCategory] || 'Otros')}</span></div>
+                <div class="compra-card__tags"><span>${escapeHtml(expensePaymentLabel(c))}</span><span>${escapeHtml(EXPENSE_CATEGORIES[c.expenseCategory] || 'Otros')}</span></div>
               </div>
               <div class="compra-card__total">${fmtMoney(c.total || 0)}</div>
             </header>
@@ -930,7 +936,7 @@ function updateHouseholdReview() {
   const ideal = Number($('#household-budget-ideal').value);
   const limit = Number($('#household-budget-limit').value);
   $('#household-review-budget').textContent = ideal > 0 && limit > ideal
-    ? `Ideal ${fmtMoney(ideal)} · máximo ${fmtMoney(limit)}` : '—';
+    ? `Ideal ${fmtMoney(ideal)} · máximo ${fmtMoney(limit)}` : 'Sin límites por ahora';
 }
 
 function showHouseholdStep(step) {
@@ -960,7 +966,13 @@ function validateHouseholdStep(step) {
   if (step === 3) {
     const ideal = Number($('#household-budget-ideal').value);
     const limit = Number($('#household-budget-limit').value);
-    if (!(ideal > 0) || !(limit > ideal)) {
+    const cycleStartDay = Number($('#household-cycle-start').value);
+    if (!(cycleStartDay >= 1 && cycleStartDay <= 28)) {
+      householdError('Elegí un día entre 1 y 28 para comenzar el período.');
+      $('#household-cycle-start').focus();
+      return false;
+    }
+    if ((ideal || limit) && (!(ideal > 0) || !(limit > ideal))) {
       householdError('El límite máximo debe ser mayor que el gasto ideal.');
       (!(ideal > 0) ? $('#household-budget-ideal') : $('#household-budget-limit')).focus();
       return false;
@@ -977,8 +989,9 @@ function resetHouseholdSetup(user) {
   $('#household-partner').value = '';
   $('#household-child').value = '';
   $('#household-name').value = user.name ? `Hogar de ${user.name.split(' ')[0]}` : '';
-  $('#household-budget-ideal').value = '30000';
-  $('#household-budget-limit').value = '35000';
+  $('#household-cycle-start').value = '1';
+  $('#household-budget-ideal').value = '';
+  $('#household-budget-limit').value = '';
   $('#household-location-status').textContent = 'Podés activarla ahora o hacerlo más adelante.';
   $('#household-location').textContent = 'Usar mi ubicación';
   $('#household-location').disabled = false;
@@ -1082,6 +1095,7 @@ function startApp() {
 
   subscribeHome((home) => {
     state.home = { cards: {}, ...home };
+    if (!state.household.legacy && !state.home.expenseSettings) state.home.expenseBudget = null;
     if (state.home.cardLabels?.alma) CATEGORIES.alma.label = state.home.cardLabels.alma;
     if (state.view === 'home') renderHome();
     if (state.view === 'compras') renderCompras();
@@ -1236,6 +1250,7 @@ async function boot() {
           childPhoto: householdSetupPhotos.child,
           expenseIdeal: $('#household-budget-ideal').value,
           expenseLimit: $('#household-budget-limit').value,
+          cycleStartDay: $('#household-cycle-start').value,
           priceArea: householdSetupLocation,
         }, pendingAuthUser);
         const context = await createHousehold(draft, pendingAuthUser);
@@ -1374,12 +1389,22 @@ async function boot() {
     getInventory: () => state.inventory,
     saveReceiptBundle,
     isDark,
+    getExpenseSettings: expenseSettingsForHome,
+    isLegacy: () => Boolean(state.household.legacy),
   });
 
   initExpenses({
     getMe: () => state.me,
     getPurchases: () => state.compras,
     getBudget: () => state.home.expenseBudget,
+    getExpenseSettings: expenseSettingsForHome,
+    isLegacy: () => Boolean(state.household.legacy),
+    saveExpenseSettings: async (expenseSettings) => {
+      const normalized = normalizeExpenseSettings(expenseSettings);
+      state.home = { ...state.home, expenseSettings: normalized };
+      await saveHome({ expenseSettings: normalized });
+      renderCompras();
+    },
     saveBudget: async (expenseBudget) => {
       state.home = { ...state.home, expenseBudget };
       await saveHome({ expenseBudget });

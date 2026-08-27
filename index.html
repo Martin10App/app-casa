@@ -302,9 +302,10 @@
         </section>
 
         <section class="setup-step" data-setup-step="3" hidden>
-          <div class="setup-step__heading"><span>Paso 3 de 4</span><h3>Objetivos de gastos</h3><p>Se aplican a cada período de tarjeta, del día 24 al 23.</p></div>
-          <label class="field"><span class="field__label">Gasto ideal</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-ideal" type="number" min="1" step="100" inputmode="decimal" required value="30000"></span><small>Hasta este monto, el semáforo permanece en verde.</small></label>
-          <label class="field"><span class="field__label">Límite máximo</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-limit" type="number" min="1" step="100" inputmode="decimal" required value="35000"></span><small>Al superarlo, el semáforo cambia a rojo.</small></label>
+          <div class="setup-step__heading"><span>Paso 3 de 4</span><h3>Tu período de gastos</h3><p>Elegí cuándo empieza tu mes. Todo arranca en cero y después podés agregar tarjetas.</p></div>
+          <label class="field"><span class="field__label">Día en que empieza el período</span><input class="field__input" id="household-cycle-start" type="number" min="1" max="28" step="1" inputmode="numeric" required value="1"><small>Por ejemplo, 1 para mes calendario o 24 para contar del 24 al 23.</small></label>
+          <label class="field"><span class="field__label">Gasto ideal (opcional)</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-ideal" type="number" min="1" step="100" inputmode="decimal" placeholder="Sin definir"></span></label>
+          <label class="field"><span class="field__label">Límite máximo (opcional)</span><span class="field__prefix-wrap"><span class="field__prefix">$</span><input class="field__input field__input--prefixed" id="household-budget-limit" type="number" min="1" step="100" inputmode="decimal" placeholder="Sin definir"></span></label>
           <div class="setup-budget-legend" aria-label="Funcionamiento del semáforo"><span><i class="is-green"></i>Ideal</span><span><i class="is-yellow"></i>Atención</span><span><i class="is-red"></i>Superado</span></div>
         </section>
 
